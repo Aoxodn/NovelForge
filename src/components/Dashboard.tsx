@@ -5,6 +5,7 @@ import * as api from '../api';
 import { useAppStore } from '../store/appStore';
 import type { RecentProject } from '../types/models';
 import { NewProjectModal } from './NewProjectModal';
+import { WindowControls } from './WindowControls';
 import { IconDocPlus, IconFolderPlus, IconImport, IconTrash } from './icons';
 
 export function Dashboard() {
@@ -44,60 +45,76 @@ export function Dashboard() {
 
   return (
     <div className="dashboard">
-      <div className="dashboard-inner">
-        <header className="dashboard-header">
-          <div className="dashboard-logo">文</div>
-          <h1>
-            NovelForge <span className="logo-cn">小说工坊</span>
-          </h1>
-          <p className="dashboard-sub">本地优先 · 完全离线 · 你的小说只属于你</p>
-        </header>
+      {/* 无边框窗口：顶部拖拽条 + 窗口控制按钮 */}
+      <div className="dash-titlebar" data-tauri-drag-region="deep">
+        <WindowControls />
+      </div>
 
-        <div className="dashboard-actions">
-          <button className="action-card" onClick={() => setModal('blank')} disabled={busy}>
-            <IconDocPlus size={26} />
-            <span>新建小说</span>
-          </button>
-          <button className="action-card" onClick={() => setModal('import')} disabled={busy}>
-            <IconImport size={26} />
-            <span>导入小说</span>
-          </button>
-          <button className="action-card" onClick={openExisting} disabled={busy}>
-            <IconFolderPlus size={26} />
-            <span>打开项目</span>
-          </button>
+      <div className="dashboard-scroll">
+        <div className="dashboard-inner">
+          <header className="dashboard-header">
+            <div className="dashboard-logo">文</div>
+            <h1>
+              NovelForge <span className="logo-cn">小说工坊</span>
+            </h1>
+            <p className="dashboard-sub">本地优先 · 完全离线 · 你的小说只属于你</p>
+          </header>
+
+          <div className="dashboard-actions">
+            <button className="action-card" onClick={() => setModal('blank')} disabled={busy}>
+              <span className="action-icon">
+                <IconDocPlus size={20} />
+              </span>
+              <span className="action-label">新建小说</span>
+              <span className="action-hint">从零开始创作</span>
+            </button>
+            <button className="action-card" onClick={() => setModal('import')} disabled={busy}>
+              <span className="action-icon">
+                <IconImport size={20} />
+              </span>
+              <span className="action-label">导入小说</span>
+              <span className="action-hint">TXT / DOCX 智能分章</span>
+            </button>
+            <button className="action-card" onClick={openExisting} disabled={busy}>
+              <span className="action-icon">
+                <IconFolderPlus size={20} />
+              </span>
+              <span className="action-label">打开项目</span>
+              <span className="action-hint">继续已有作品</span>
+            </button>
+          </div>
+
+          <section className="recent-section">
+            <h2>最近项目</h2>
+            {recent.length === 0 ? (
+              <p className="recent-empty">还没有打开过的项目，从「新建小说」开始创作吧。</p>
+            ) : (
+              <ul className="recent-list">
+                {recent.map((p) => (
+                  <li key={p.path}>
+                    <button
+                      className="recent-item"
+                      disabled={busy}
+                      onClick={() => openProject(p.path)}
+                      title={p.path}
+                    >
+                      <span className="recent-name">《{p.name}》</span>
+                      <span className="recent-path">{p.path}</span>
+                      <span className="recent-time">{p.lastOpenedAt}</span>
+                    </button>
+                    <button
+                      className="icon-btn recent-remove"
+                      title="从列表移除"
+                      onClick={() => removeRecent(p.path)}
+                    >
+                      <IconTrash />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
-
-        <section className="recent-section">
-          <h2>最近项目</h2>
-          {recent.length === 0 ? (
-            <p className="recent-empty">还没有打开过的项目，从「新建小说」开始创作吧。</p>
-          ) : (
-            <ul className="recent-list">
-              {recent.map((p) => (
-                <li key={p.path}>
-                  <button
-                    className="recent-item"
-                    disabled={busy}
-                    onClick={() => openProject(p.path)}
-                    title={p.path}
-                  >
-                    <span className="recent-name">《{p.name}》</span>
-                    <span className="recent-path">{p.path}</span>
-                    <span className="recent-time">{p.lastOpenedAt}</span>
-                  </button>
-                  <button
-                    className="icon-btn recent-remove"
-                    title="从列表移除"
-                    onClick={() => removeRecent(p.path)}
-                  >
-                    <IconTrash />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
       </div>
 
       {modal && <NewProjectModal mode={modal} onClose={() => setModal(null)} />}

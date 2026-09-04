@@ -144,3 +144,28 @@ export const IconCopy = ({ size = 14 }: P) => (
     <path d="M5 15V5a2 2 0 0 1 2-2h10" />
   </svg>
 );
+
+export const IconMinimize = ({ size = 12 }: P) => (
+  <svg {...base(size)}>
+    <path d="M5 12h14" />
+  </svg>
+);
+
+export const IconMaximize = ({ size = 12 }: P) => (
+  <svg {...base(size)}>
+    <rect x="6" y="6" width="12" height="12" rx="1.5" />
+  </svg>
+);
+
+export const IconRestore = ({ size = 12 }: P) => (
+  <svg {...base(size)}>
+    <rect x="5" y="8" width="11" height="11" rx="1.5" />
+    <path d="M9 5h8.5A1.5 1.5 0 0 1 19 6.5V15" />
+  </svg>
+);
+
+export const IconClose = ({ size = 12 }: P) => (
+  <svg {...base(size)}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+);

@@ -708,42 +708,91 @@ button:active:not(:disabled) {
   color: var(--text-faint);
 }
 
+/* ---------- 无边框窗口控制按钮 ---------- */
+.win-controls {
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+}
+.win-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 32px;
+  border-radius: 6px;
+  color: var(--text-dim);
+}
+.win-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.win-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
 /* ---------- 仪表盘 ---------- */
 .dashboard {
   flex: 1;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: var(--bg);
 }
 
+/* 顶部拖拽条：承载窗口控制按钮，空白处可拖动窗口 */
+.dash-titlebar {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 6px;
+}
+
+.dashboard-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
 .dashboard-inner {
-  max-width: 640px;
+  max-width: 680px;
   margin: 0 auto;
-  padding: 64px 24px 48px;
+  padding: 32px 24px 56px;
 }
 
 .dashboard-header {
   text-align: center;
-  margin-bottom: 40px;
+  margin-bottom: 44px;
+  animation: fadeUp var(--dur-slow) var(--ease) both;
 }
 
 .dashboard-logo {
-  width: 72px;
-  height: 72px;
-  margin: 0 auto 18px;
-  border-radius: 18px;
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 20px;
+  border-radius: 20px;
   background: linear-gradient(160deg, #1d1d23, #2c2c35);
   color: var(--accent);
-  font-size: 34px;
+  font-size: 36px;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 8px 28px var(--shadow);
+  box-shadow:
+    0 10px 32px var(--shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform var(--dur) var(--ease-spring);
+}
+.dashboard-header:hover .dashboard-logo {
+  transform: translateY(-2px) scale(1.03);
 }
 
 .dashboard-header h1 {
-  font-size: 26px;
+  font-size: 28px;
   letter-spacing: 1px;
+  font-weight: 700;
 }
 .logo-cn {
   font-size: 15px;
@@ -752,14 +801,16 @@ button:active:not(:disabled) {
   margin-left: 8px;
 }
 .dashboard-sub {
-  margin-top: 8px;
+  margin-top: 10px;
   color: var(--text-dim);
+  letter-spacing: 0.5px;
 }
 
 .dashboard-actions {
   display: flex;
   gap: 14px;
-  margin-bottom: 36px;
+  margin-bottom: 40px;
+  animation: fadeUp var(--dur-slow) var(--ease) 60ms both;
 }
 
 .action-card {
@@ -767,26 +818,58 @@ button:active:not(:disabled) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 26px 12px;
+  gap: 6px;
+  padding: 24px 12px 20px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   color: var(--text);
-  transition: border-color 0.15s, transform 0.1s;
+  transition:
+    border-color var(--dur) var(--ease),
+    transform var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    background-color var(--dur) var(--ease);
 }
-.action-card:hover {
+.action-card:hover:not(:disabled) {
   border-color: var(--accent);
-  transform: translateY(-1px);
+  transform: translateY(-3px);
+  box-shadow: 0 10px 28px var(--shadow);
 }
-.action-card span {
+
+.action-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-bottom: 6px;
+  transition: transform var(--dur) var(--ease-spring);
+}
+.action-card:hover:not(:disabled) .action-icon {
+  transform: scale(1.08);
+}
+
+.action-label {
   font-size: 14px;
+  font-weight: 600;
+}
+.action-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.recent-section {
+  animation: fadeUp var(--dur-slow) var(--ease) 120ms both;
 }
 
 .recent-section h2 {
   font-size: 13px;
   color: var(--text-dim);
   margin-bottom: 10px;
+  letter-spacing: 0.5px;
 }
 
 .recent-empty {
@@ -818,9 +901,15 @@ button:active:not(:disabled) {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
 }
-.recent-item:hover {
+.recent-item:hover:not(:disabled) {
   border-color: var(--accent);
+  background: var(--bg-elevated);
+  transform: translateX(2px);
 }
 .recent-name {
   font-size: 14px;
@@ -839,6 +928,17 @@ button:active:not(:disabled) {
 }
 .recent-remove {
   align-self: center;
+  opacity: 0;
+}
+.recent-list li:hover .recent-remove {
+  opacity: 1;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
 }
 
 /* ---------- 模态框 ---------- */

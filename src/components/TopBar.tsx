@@ -3,6 +3,7 @@ import { useAppStore } from '../store/appStore';
 import { useEditorStore } from '../store/editorStore';
 import { useCountUp } from '../hooks/useCountUp';
 import { IconBack, IconChart, IconDice, IconExport, IconSearch, IconSettings, IconShield, IconUsers } from './icons';
+import { WindowControls } from './WindowControls';
 import { fmt } from '../utils/text';
 import type { Theme } from '../types/models';
 
@@ -42,7 +43,7 @@ export function TopBar({ onOpenSettings, onOpenExport, onOpenSearch, onOpenBacku
   };
 
   return (
-    <header className="topbar">
+    <header className="topbar" data-tauri-drag-region="deep">
       <div className="topbar-left">
         <button className="icon-btn" title="返回首页" onClick={() => void back()}>
           <IconBack />
@@ -81,6 +82,7 @@ export function TopBar({ onOpenSettings, onOpenExport, onOpenSearch, onOpenBacku
         <button className="icon-btn" title="显示设置（字体 / 字号 / 行距）" onClick={onOpenSettings}>
           <IconSettings />
         </button>
+        <WindowControls />
       </div>
     </header>
   );
