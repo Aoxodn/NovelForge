@@ -1,0 +1,31 @@
+[package]
+name = "novelforge"
+version = "0.1.0"
+description = "NovelForge 小说工坊 - 本地优先的小说创作与结构分析软件"
+edition = "2021"
+
+[lib]
+name = "novelforge_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# bundled：内嵌 SQLite，最终用户无需安装任何数据库
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "2"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+quick-xml = "0.42.0"
+encoding_rs = "0.8.35"
+regex = "1.13.1"
+
+[profile.release]
+# 减小安装包体积
+strip = true
+lto = true
+codegen-units = 1

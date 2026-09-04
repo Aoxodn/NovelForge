@@ -1,0 +1,402 @@
+/**
+ * 左侧小说目录（文档第十一、十二节）：
+ * 卷（可折叠）/ 章节两级树；支持右键菜单、跨卷拖拽、卷内排序。
+ */
+import { useEffect, useMemo, useState } from 'react';
+import * as api from '../api';
+import { useAppStore } from '../store/appStore';
+import { useEditorStore } from '../store/editorStore';
+import type { ChapterMeta, Volume } from '../types/models';
+import { ContextMenu } from './ContextMenu';
+import { PromptModal } from './Modal';
+import { ImportModal } from './ImportModal';
+import { IconChevron, IconDocPlus, IconFolderPlus, IconImport } from './icons';
+import { fmt } from '../utils/text';
+
+interface DragState {
+  type: 'chapter';
+  chapterId: number;
+  fromVolumeId: number;
+}
+
+export function ChapterTree() {
+  const tree = useAppStore((s) => s.tree)!;
+  const selectedChapterId = useAppStore((s) => s.selectedChapterId);
+  const selectChapter = useAppStore((s) => s.selectChapter);
+  const refreshTree = useAppStore((s) => s.refreshTree);
+  const showToast = useAppStore((s) => s.showToast);
+  const pendingImportPath = useAppStore((s) => s.pendingImportPath);
+  const setPendingImportPath = useAppStore((s) => s.setPendingImportPath);
+  const loadChapter = useEditorStore((s) => s.loadChapter);
+  const clearEditor = useEditorStore((s) => s.clear);
+
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const [prompt, setPrompt] = useState<
+    | { kind: 'newVolume' }
+    | { kind: 'renameVolume'; volume: Volume }
+    | { kind: 'newChapter'; volumeId: number }
+    | { kind: 'renameChapter'; chapter: ChapterMeta }
+    | null
+  >(null);
+
+  // 按卷分组
+  const chaptersByVolume = useMemo(() => {
+    const map = new Map<number, ChapterMeta[]>();
+    for (const v of tree.volumes) map.set(v.id, []);
+    for (const c of tree.chapters) map.get(c.volumeId)?.push(c);
+    return map;
+  }, [tree]);
+
+  // Ctrl+N 全局快捷键：在当前章节所在卷（否则第一个卷）新建章节
+  useEffect(() => {
+    const handler = () => {
+      const currentVolumeId = useEditorStore.getState().volumeId;
+      const target =
+        tree.volumes.find((v) => v.id === currentVolumeId) ?? tree.volumes[0];
+      if (target) setPrompt({ kind: 'newChapter', volumeId: target.id });
+    };
+    window.addEventListener('nf:new-chapter', handler);
+    return () => window.removeEventListener('nf:new-chapter', handler);
+  }, [tree]);
+
+  // 首页「导入小说」流程：项目打开后自动弹出智能导入（预选文件）
+  useEffect(() => {
+    if (pendingImportPath) setShowImport(true);
+  }, [pendingImportPath]);
+
+  const onChapterClick = (id: number) => {
+    if (id === selectedChapterId) return;
+    selectChapter(id);
+    void loadChapter(id);
+  };
+
+  // ---------- 创建 / 重命名 / 删除 ----------
+
+  const doCreateVolume = async (title: string) => {
+    if (!title.trim()) return;
+    try {
+      await api.createVolume(title.trim());
+      setPrompt(null);
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  };
+
+  const doRenameVolume = async (volume: Volume, title: string) => {
+    if (!title.trim()) return;
+    try {
+      await api.renameVolume(volume.id, title.trim());
+      setPrompt(null);
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  };
+
+  const doCreateChapter = async (volumeId: number, title: string) => {
+    try {
+      const detail = await api.createChapter(volumeId, title.trim() || undefined);
+      setPrompt(null);
+      await refreshTree();
+      selectChapter(detail.id);
+      await loadChapter(detail.id);
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  };
+
+  const doRenameChapter = async (chapter: ChapterMeta, title: string) => {
+    if (!title.trim()) return;
+    try {
+      await api.renameChapter(chapter.id, title.trim());
+      setPrompt(null);
+      await refreshTree();
+      // 若正在编辑该章，同步编辑器标题
+      const ed = useEditorStore.getState();
+      if (ed.chapterId === chapter.id) ed.setTitle(title.trim());
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  };
+
+  const confirmDeleteVolume = async (volume: Volume) => {
+    const ok = window.confirm(
+      `确定删除卷「${volume.title}」吗？\n\n该卷下 ${volume.chapterCount} 个章节（含历史版本）将被一并删除，此操作不可撤销。`,
+    );
+    if (!ok) return;
+    try {
+      await api.deleteVolume(volume.id);
+      // 若当前编辑章节位于被删卷中，清空编辑器
+      const ed = useEditorStore.getState();
+      const inDeleted = chaptersByVolume.get(volume.id)?.some((c) => c.id === ed.chapterId);
+      if (inDeleted) {
+        selectChapter(null);
+        clearEditor();
+      }
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  };
+
+  const confirmDeleteChapter = async (chapter: ChapterMeta) => {
+    const ok = window.confirm(`确定删除「${chapter.title}」吗？\n\n此操作不可撤销。`);
+    if (!ok) return;
+    try {
+      await api.deleteChapter(chapter.id);
+      const ed = useEditorStore.getState();
+      if (ed.chapterId === chapter.id) {
+        selectChapter(null);
+        clearEditor();
+      }
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  };
+
+  // ---------- 移动 ----------
+
+  const moveChapterWithin = async (
+    chapterId: number,
+    currentIndex: number,
+    targetIndex: number,
+    volumeId: number,
+  ) => {
+    if (targetIndex === currentIndex) return;
+    try {
+      await api.moveChapter(chapterId, volumeId, targetIndex);
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  };
+
+  const dropOnVolume = async (volumeId: number) => {
+    if (!drag) return;
+    const list = chaptersByVolume.get(volumeId) ?? [];
+    if (drag.fromVolumeId === volumeId) return; // 同卷且目标是卷尾 = 无操作（除非想移到末尾）
+    try {
+      await api.moveChapter(drag.chapterId, volumeId, list.length);
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    } finally {
+      setDrag(null);
+    }
+  };
+
+  const dropOnChapter = async (target: ChapterMeta) => {
+    if (!drag) return;
+    if (drag.chapterId === target.id) return;
+    const list = chaptersByVolume.get(target.volumeId) ?? [];
+    let targetIndex = list.findIndex((c) => c.id === target.id);
+    // 同卷向下拖动时，插入位需要补偿被移出的元素
+    if (drag.fromVolumeId === target.volumeId) {
+      const fromIndex = list.findIndex((c) => c.id === drag.chapterId);
+      if (fromIndex !== -1 && fromIndex < targetIndex) targetIndex -= 1;
+    }
+    try {
+      await api.moveChapter(drag.chapterId, target.volumeId, targetIndex);
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    } finally {
+      setDrag(null);
+    }
+  };
+
+  // ---------- 右键菜单 ----------
+
+  const volumeMenu = (e: React.MouseEvent, volume: Volume) => {
+    e.preventDefault();
+    e.stopPropagation();
+    ContextMenu.open(e.clientX, e.clientY, [
+      { label: '新建章节', onClick: () => setPrompt({ kind: 'newChapter', volumeId: volume.id }) },
+      { separator: true, label: '' },
+      { label: '重命名卷', onClick: () => setPrompt({ kind: 'renameVolume', volume }) },
+      { label: '上移', onClick: () => moveVolume(volume, -1) },
+      { label: '下移', onClick: () => moveVolume(volume, 1) },
+      { separator: true, label: '' },
+      { label: '删除卷', danger: true, onClick: () => confirmDeleteVolume(volume) },
+    ]);
+  };
+
+  const chapterMenu = (e: React.MouseEvent, chapter: ChapterMeta, list: ChapterMeta[]) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const idx = list.findIndex((c) => c.id === chapter.id);
+    ContextMenu.open(e.clientX, e.clientY, [
+      { label: '重命名章节', onClick: () => setPrompt({ kind: 'renameChapter', chapter }) },
+      { label: '上移', disabled: idx <= 0, onClick: () => moveChapterWithin(chapter.id, idx, idx - 1, chapter.volumeId) },
+      { label: '下移', disabled: idx >= list.length - 1, onClick: () => moveChapterWithin(chapter.id, idx, idx + 1, chapter.volumeId) },
+      { separator: true, label: '' },
+      { label: '删除章节', danger: true, onClick: () => confirmDeleteChapter(chapter) },
+    ]);
+  };
+
+  const moveVolume = async (volume: Volume, delta: number) => {
+    const idx = tree.volumes.findIndex((v) => v.id === volume.id);
+    const target = idx + delta;
+    if (target < 0 || target >= tree.volumes.length) return;
+    try {
+      await api.moveVolume(volume.id, target);
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  };
+
+  const toggleCollapse = (id: number) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // ---------- 渲染 ----------
+
+  return (
+    <aside
+      className="sidebar"
+      onDragEnd={() => setDrag(null)}
+    >
+      <div className="sidebar-header">
+        <span>目录</span>
+        <div className="sidebar-actions">
+          <button
+            className="icon-btn"
+            title="导入 TXT / DOCX / MD（智能拆章）"
+            onClick={() => setShowImport(true)}
+          >
+            <IconImport />
+          </button>
+          <button
+            className="icon-btn"
+            title="新建卷"
+            onClick={() => setPrompt({ kind: 'newVolume' })}
+          >
+            <IconFolderPlus />
+          </button>
+          <button
+            className="icon-btn"
+            title="新建章节 (Ctrl+N)"
+            onClick={() => {
+              const v = tree.volumes[0];
+              if (v) setPrompt({ kind: 'newChapter', volumeId: v.id });
+            }}
+          >
+            <IconDocPlus />
+          </button>
+        </div>
+      </div>
+
+      <div className="sidebar-tree">
+        {tree.volumes.map((volume) => {
+          const chapters = chaptersByVolume.get(volume.id) ?? [];
+          const isCollapsed = collapsed.has(volume.id);
+          return (
+            <div key={volume.id} className="volume-group">
+              <div
+                className="volume-row"
+                onClick={() => toggleCollapse(volume.id)}
+                onContextMenu={(e) => volumeMenu(e, volume)}
+                onDragOver={(e) => {
+                  if (drag) e.preventDefault();
+                }}
+                onDrop={() => dropOnVolume(volume.id)}
+              >
+                <IconChevron open={!isCollapsed} />
+                <span className="volume-title" title={volume.title}>
+                  {volume.title}
+                </span>
+                <span className="volume-meta">
+                  {volume.chapterCount > 0 && `${fmt(volume.wordCount)}字`}
+                </span>
+              </div>
+
+              {!isCollapsed && (
+                <ul className="chapter-list">
+                  {chapters.length === 0 && <li className="chapter-empty">（空卷，右键新建章节）</li>}
+                  {chapters.map((ch) => (
+                    <li
+                      key={ch.id}
+                      className={`chapter-row${ch.id === selectedChapterId ? ' active' : ''}`}
+                      draggable
+                      onDragStart={() =>
+                        setDrag({ type: 'chapter', chapterId: ch.id, fromVolumeId: ch.volumeId })
+                      }
+                      onDragOver={(e) => {
+                        if (drag) e.preventDefault();
+                      }}
+                      onDrop={(e) => {
+                        e.stopPropagation();
+                        void dropOnChapter(ch);
+                      }}
+                      onClick={() => onChapterClick(ch.id)}
+                      onContextMenu={(e) => chapterMenu(e, ch, chapters)}
+                    >
+                      <span className="chapter-status-dot" data-status={ch.status} />
+                      <span className="chapter-title" title={ch.title}>
+                        {ch.title}
+                      </span>
+                      <span className="chapter-words">{fmt(ch.wordCount)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {prompt?.kind === 'newVolume' && (
+        <PromptModal
+          title="新建卷"
+          placeholder="例如：第一卷 青云"
+          onCancel={() => setPrompt(null)}
+          onConfirm={doCreateVolume}
+        />
+      )}
+      {prompt?.kind === 'renameVolume' && (
+        <PromptModal
+          title="重命名卷"
+          initial={prompt.volume.title}
+          onCancel={() => setPrompt(null)}
+          onConfirm={(v) => doRenameVolume(prompt.volume, v)}
+        />
+      )}
+      {prompt?.kind === 'newChapter' && (
+        <PromptModal
+          title="新建章节"
+          placeholder="留空则自动编号（第N章）"
+          onCancel={() => setPrompt(null)}
+          onConfirm={(v) => doCreateChapter(prompt.volumeId, v)}
+        />
+      )}
+      {prompt?.kind === 'renameChapter' && (
+        <PromptModal
+          title="重命名章节"
+          initial={prompt.chapter.title}
+          onCancel={() => setPrompt(null)}
+          onConfirm={(v) => doRenameChapter(prompt.chapter, v)}
+        />
+      )}
+
+      {showImport && (
+        <ImportModal
+          presetPath={pendingImportPath ?? undefined}
+          onClose={() => {
+            setShowImport(false);
+            if (pendingImportPath) setPendingImportPath(null);
+          }}
+        />
+      )}
+    </aside>
+  );
+}
