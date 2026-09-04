@@ -68,8 +68,9 @@ pub fn get_writing_stats(state: State<'_, AppState>) -> Result<WritingStats> {
             rows
         };
 
+        // 标量子查询：当天无记录也返回一行 0，避免 query_row 报 QueryReturnedNoRows
         let today_words: i64 = db.conn.query_row(
-            "SELECT COALESCE(words, 0) FROM writing_daily WHERE date = date('now','localtime')",
+            "SELECT COALESCE((SELECT words FROM writing_daily WHERE date = date('now','localtime')), 0)",
             [],
             |r| r.get(0),
         )?;

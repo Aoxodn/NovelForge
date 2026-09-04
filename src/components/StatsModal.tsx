@@ -48,9 +48,17 @@ export function StatsModal({ onClose }: { onClose: () => void }) {
   const showToast = useAppStore((s) => s.showToast);
   const writerSettings = useAppStore((s) => s.writerSettings);
   const [stats, setStats] = useState<WritingStats | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    void api.getWritingStats().then(setStats).catch((e) => showToast(String(e), 'error'));
+    setFailed(false);
+    void api
+      .getWritingStats()
+      .then(setStats)
+      .catch((e) => {
+        setFailed(true);
+        showToast(String(e), 'error');
+      });
   }, [showToast]);
 
   const fee =
@@ -61,7 +69,7 @@ export function StatsModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="码字统计" onClose={onClose} width={680}>
       {!stats ? (
-        <p className="info-empty">加载中…</p>
+        <p className="info-empty">{failed ? '统计加载失败，请重开弹窗重试' : '加载中…'}</p>
       ) : (
         <>
           <div className="stats-grid">
