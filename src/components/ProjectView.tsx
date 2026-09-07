@@ -21,6 +21,8 @@ import { BackupModal } from './BackupModal';
 import { CardsModal } from './CardsModal';
 import { StatsModal } from './StatsModal';
 import { NameGeneratorModal } from './NameGeneratorModal';
+import { StoryMap } from './StoryMap';
+import { OverviewView } from './OverviewView';
 
 /** 自动备份周期（文档：每 30 分钟） */
 const AUTO_BACKUP_INTERVAL_MS = 30 * 60 * 1000;
@@ -33,7 +35,25 @@ export function ProjectView() {
   const [showCards, setShowCards] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [showNames, setShowNames] = useState(false);
+  /** true = 正在播放「合上书本」退场动画 */
+  const [closing, setClosing] = useState(false);
   const projectPath = useAppStore((s) => s.tree?.projectPath ?? null);
+  const closeProject = useAppStore((s) => s.closeProject);
+  const focusMode = useAppStore((s) => s.focusMode);
+  const viewMode = useAppStore((s) => s.viewMode);
+
+  /** 返回首页：先播关书动画，动画结束后再保存落库并切换视图 */
+  const handleBack = () => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(async () => {
+      // 返回前确保未保存内容落库
+      const ed = useEditorStore.getState();
+      if (ed.chapterId !== null && ed.dirty) await ed.save(false);
+      ed.clear();
+      await closeProject();
+    }, 320);
+  };
 
   // 打开项目后重建人物/地点出场统计（V3 迁移后 mentions 为空；
   // 后台线程精确匹配，完成后广播事件刷新信息面板与卡片）
@@ -58,7 +78,7 @@ export function ProjectView() {
     return () => window.removeEventListener('nf:open-name-generator', h);
   }, []);
 
-  // 全局快捷键：Ctrl+N 新建章节；Ctrl+F 全文搜索
+  // 全局快捷键：Ctrl+N 新建章节；Ctrl+F 全文搜索；Ctrl+J / F11 专注模式；Esc 退出专注
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'n') {
@@ -67,6 +87,11 @@ export function ProjectView() {
       } else if (e.ctrlKey && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setShowSearch(true);
+      } else if ((e.ctrlKey && e.key.toLowerCase() === 'j') || e.key === 'F11') {
+        e.preventDefault();
+        useAppStore.getState().toggleFocusMode();
+      } else if (e.key === 'Escape' && useAppStore.getState().focusMode) {
+        useAppStore.getState().toggleFocusMode();
       }
     };
     window.addEventListener('keydown', handler);
@@ -76,7 +101,13 @@ export function ProjectView() {
   // 窗口关闭前冲刷未保存内容（防崩溃丢字）；保存失败也放行关闭，
   // 内容已在 500ms 防抖周期内尽量落库
   useEffect(() => {
-    const win = getCurrentWindow();
+    // 非 Tauri 环境（浏览器预览）无窗口 API，跳过
+    let win: ReturnType<typeof getCurrentWindow>;
+    try {
+      win = getCurrentWindow();
+    } catch {
+      return;
+    }
     const promise = win.onCloseRequested(async (event) => {
       const ed = useEditorStore.getState();
       if (ed.chapterId !== null && ed.dirty) {
@@ -102,8 +133,9 @@ export function ProjectView() {
   }, []);
 
   return (
-    <div className="project-view">
+    <div className={`project-view${closing ? ' closing' : ''}`}>
       <TopBar
+        onBack={handleBack}
         onOpenSettings={() => setShowSettings(true)}
         onOpenExport={() => setShowExport(true)}
         onOpenSearch={() => setShowSearch(true)}
@@ -112,11 +144,25 @@ export function ProjectView() {
         onOpenStats={() => setShowStats(true)}
         onOpenNames={() => setShowNames(true)}
       />
-      <div className="main-columns">
+      {/* 专注模式仅用 CSS 隐藏两栏：组件保持挂载，卷展开状态不丢、数据不重拉 */}
+      <div
+        className={`main-columns${focusMode ? ' focus' : ''}${viewMode !== 'editor' ? ' view-switched' : ''}`}
+      >
         <ChapterTree />
         <ChapterEditor />
         <InfoPanel />
       </div>
+      {/* 故事地图 / 全书总览：与三栏并列的独立视图（同源 story graph） */}
+      {viewMode === 'map' && (
+        <div className="story-view">
+          <StoryMap />
+        </div>
+      )}
+      {viewMode === 'overview' && (
+        <div className="story-view">
+          <OverviewView />
+        </div>
+      )}
       <StatusBar />
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       {showExport && <ExportModal onClose={() => setShowExport(false)} />}

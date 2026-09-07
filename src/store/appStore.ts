@@ -28,6 +28,12 @@ interface AppStore {
   theme: Theme;
   editorSettings: EditorSettings;
   writerSettings: WriterSettings;
+  /** 专注模式：隐藏目录 / 信息两栏，正文居中限宽（会话级偏好，不持久化） */
+  focusMode: boolean;
+  /** 主区视图：editor=三栏写作 map=故事地图 overview=全书总览（三栏保持挂载） */
+  viewMode: 'editor' | 'map' | 'overview';
+  /** 请求故事地图定位高亮某节点（InfoPanel / 总览跳转用，消费后自清） */
+  mapFocusChapterId: number | null;
   /** 今日累计码字（打开项目时拉取，保存后由后端权威值刷新） */
   todayWords: number;
   toast: { text: string; kind: 'info' | 'error' } | null;
@@ -44,8 +50,13 @@ interface AppStore {
   closeProject: () => Promise<void>;
   refreshTree: () => Promise<void>;
   selectChapter: (id: number | null) => void;
+  setViewMode: (m: 'editor' | 'map' | 'overview') => void;
+  /** 切到故事地图并定位高亮节点 */
+  focusMapNode: (chapterId: number) => void;
+  clearMapFocus: () => void;
   setPendingImportPath: (p: string | null) => void;
   setTheme: (t: Theme) => void;
+  toggleFocusMode: () => void;
   updateEditorSettings: (patch: Partial<EditorSettings>) => void;
   updateWriterSettings: (patch: Partial<WriterSettings>) => void;
   setTodayWords: (n: number) => void;
@@ -98,6 +109,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   theme: loadTheme(),
   editorSettings: loadEditorSettings(),
   writerSettings: loadWriterSettings(),
+  focusMode: false,
+  viewMode: 'editor',
+  mapFocusChapterId: null,
   todayWords: 0,
   toast: null,
   pendingImportPath: null,
@@ -131,7 +145,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   closeProject: async () => {
     await api.closeProject();
-    set({ tree: null, selectedChapterId: null, todayWords: 0 });
+    set({ tree: null, selectedChapterId: null, todayWords: 0, viewMode: 'editor', mapFocusChapterId: null });
   },
 
   refreshTree: async () => {
@@ -149,12 +163,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   selectChapter: (id) => set({ selectedChapterId: id }),
 
+  setViewMode: (m) => set({ viewMode: m }),
+
+  focusMapNode: (chapterId) =>
+    set({ viewMode: 'map', mapFocusChapterId: chapterId }),
+
+  clearMapFocus: () => set({ mapFocusChapterId: null }),
+
   setPendingImportPath: (p) => set({ pendingImportPath: p }),
 
   setTheme: (t) => {
     localStorage.setItem(THEME_KEY, t);
     set({ theme: t });
   },
+
+  toggleFocusMode: () => set((s) => ({ focusMode: !s.focusMode })),
 
   updateEditorSettings: (patch) => {
     const next = { ...get().editorSettings, ...patch };

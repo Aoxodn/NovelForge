@@ -7,7 +7,13 @@ export function WindowControls() {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
-    const win = getCurrentWindow();
+    // 非 Tauri 环境（如浏览器直接预览）下窗口 API 不可用，跳过即可
+    let win: ReturnType<typeof getCurrentWindow>;
+    try {
+      win = getCurrentWindow();
+    } catch {
+      return;
+    }
     void win.isMaximized().then(setMaximized).catch(() => undefined);
     let unlisten: (() => void) | null = null;
     void win

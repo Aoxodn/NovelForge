@@ -38,6 +38,7 @@ fn chapter_order(conn: &Connection) -> Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT c.id FROM chapters c
          JOIN volumes v ON v.id = c.volume_id
+         WHERE c.deleted_at IS NULL
          ORDER BY v.sort_order, c.sort_order, c.id",
     )?;
     let ids = stmt
@@ -147,7 +148,7 @@ fn rescan_character(conn: &Connection, character_id: i64) -> Result<()> {
     let pats = character_patterns(&name, &parse_aliases(&aliases_json));
 
     let chapters: Vec<(i64, String)> = {
-        let mut stmt = conn.prepare("SELECT id, content FROM chapters")?;
+        let mut stmt = conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL")?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -178,7 +179,7 @@ fn rescan_location(conn: &Connection, location_id: i64) -> Result<()> {
         |r| r.get(0),
     )?;
     let chapters: Vec<(i64, String)> = {
-        let mut stmt = conn.prepare("SELECT id, content FROM chapters")?;
+        let mut stmt = conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL")?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -667,7 +668,7 @@ pub async fn rebuild_mentions(state: State<'_, AppState>) -> Result<i64> {
     // 第一阶段：读全量数据（同步，持锁时间短）
     let (chapters, characters, locations) = state.with_project(|db| {
         let chapters: Vec<(i64, String)> = {
-            let mut stmt = db.conn.prepare("SELECT id, content FROM chapters")?;
+            let mut stmt = db.conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL")?;
             let rows = stmt
                 .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
                 .collect::<std::result::Result<Vec<_>, _>>()?;

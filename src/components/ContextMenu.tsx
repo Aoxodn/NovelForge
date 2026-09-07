@@ -1,7 +1,8 @@
 /**
  * 全局右键菜单（单例 Portal 实现）。
- * 用法：ContextMenu.open(x, y, [{ label, onClick, danger }, ...])
+ * 用法：ContextMenu.open(x, y, [{ label, onClick, danger, icon }, ...])
  */
+import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useEffect, useState } from 'react';
 
@@ -11,6 +12,8 @@ export interface MenuItem {
   danger?: boolean;
   separator?: boolean;
   disabled?: boolean;
+  /** 可选图标（显示在文字左侧） */
+  icon?: ReactNode;
 }
 
 let container: HTMLDivElement | null = null;
@@ -65,13 +68,14 @@ const Menu = () => {
         ) : (
           <button
             key={i}
-            className={`menu-item${item.danger ? ' danger' : ''}`}
+            className={`menu-item${item.danger ? ' danger' : ''}${item.icon ? ' has-icon' : ''}`}
             disabled={item.disabled}
             onClick={() => {
               ContextMenu.close();
               item.onClick?.();
             }}
           >
+            {item.icon && <span className="menu-item-icon">{item.icon}</span>}
             {item.label}
           </button>
         ),

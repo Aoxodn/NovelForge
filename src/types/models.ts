@@ -6,6 +6,8 @@ export interface ProjectInfo {
   name: string;
   author: string;
   description: string;
+  /** 全书大纲：主线 / 设定 / 梗概 */
+  outline: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -28,6 +30,8 @@ export interface ChapterMeta {
   sortOrder: number;
   /** 0=草稿 1=完稿 */
   status: number;
+  /** 0=正文 1=事件 2=转折 3=支线 4=结局（V6：规划节点标注） */
+  nodeType: number;
   updatedAt: string;
 }
 
@@ -215,4 +219,139 @@ export interface WritingStats {
 }
 
 /** 随机取名类型 */
-export type NameKind = 'male' | 'female' | 'sect' | 'place';
+export type NameKind =
+  | 'person'
+  | 'place'
+  | 'sect'
+  | 'technique'
+  | 'item'
+  | 'pill'
+  | 'beast'
+  | 'plant';
+
+/** 人名筛选参数 */
+export interface NameParams {
+  gender?: 'male' | 'female' | 'any';
+  country?: 'cn' | 'jp' | 'west';
+  surnameType?: 'single' | 'compound' | 'any';
+  surname?: string;
+  given?: string;
+}
+
+/** 回收站章节条目 */
+export interface DeletedChapter {
+  id: number;
+  volumeId: number;
+  volumeTitle: string;
+  title: string;
+  wordCount: number;
+  deletedAt: string;
+}
+
+// ========== 故事地图 / 可视化写小说（V6） ==========
+
+/** 节点类型：0=正文 1=事件 2=转折 3=支线 4=结局 */
+export type StoryNodeType = 0 | 1 | 2 | 3 | 4;
+
+/** 连线类型：0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收 */
+export type StoryEdgeType = 0 | 1 | 2 | 3 | 4;
+
+/** 伏笔状态：0=活跃 1=已回收 2=失效 */
+export type ForeshadowStatus = 0 | 1 | 2;
+
+/** 剧情线（主线 / 支线 / 暗线） */
+export interface StoryArc {
+  id: number;
+  title: string;
+  /** 0=主线 1=支线 2=暗线 */
+  kind: number;
+  color: string;
+  summary: string;
+}
+
+/** 故事图节点 = 章节元数据 + 画布坐标 + 节点类型 + 弧线归属 */
+export interface StoryNode {
+  id: number;
+  volumeId: number;
+  volumeTitle: string;
+  title: string;
+  summary: string;
+  wordCount: number;
+  status: number;
+  nodeType: number;
+  /** 画布坐标，归一化 0..1；null = 未排布 */
+  mapX: number | null;
+  mapY: number | null;
+  arcId: number | null;
+  /** 全局章节序（0 起，卷序+章序；跨章计算统一口径） */
+  globalOrder: number;
+}
+
+/** 连线 */
+export interface StoryEdge {
+  id: number;
+  fromNode: number;
+  toNode: number;
+  edgeType: number;
+  arcId: number | null;
+  /** 因果说明 / 伏笔内容 */
+  label: string;
+  /** 伏笔：0=活跃 1=已回收 2=失效 */
+  status: number;
+}
+
+/** 故事图全量 */
+export interface StoryGraph {
+  nodes: StoryNode[];
+  edges: StoryEdge[];
+  arcs: StoryArc[];
+}
+
+/** 伏笔总览行 */
+export interface ForeshadowView {
+  id: number;
+  label: string;
+  status: number;
+  fromNode: number;
+  fromTitle: string;
+  toNode: number;
+  toTitle: string;
+  /** 跨度 = 全局章节序差（>= 0） */
+  span: number;
+  /** 超过阈值（settings，默认 10 章） */
+  overdue: boolean;
+  arcId: number | null;
+  fromTrashed: boolean;
+  toTrashed: boolean;
+}
+
+/** 相邻节点（本章发展的上 / 下游项） */
+export interface StoryNeighbor {
+  edgeId: number;
+  edgeType: number;
+  label: string;
+  node: StoryNode;
+}
+
+/** 本章伏笔（发展图卡片用） */
+export interface ForeshadowBrief {
+  edgeId: number;
+  label: string;
+  status: number;
+  /** 对端章节（埋设视角 = 回收章；回收视角 = 埋设章） */
+  otherNode: StoryNode;
+  span: number;
+  overdue: boolean;
+  /** 本章埋设 + 回收端已完稿 + 仍活跃 → 显示「标记已回收」轻提示 */
+  canResolve: boolean;
+}
+
+/** 单章故事上下文（右栏「本章发展」卡） */
+export interface ChapterStoryContext {
+  chapterId: number;
+  arc: StoryArc | null;
+  upstream: StoryNeighbor[];
+  downstream: StoryNeighbor[];
+  planted: ForeshadowBrief[];
+  resolved: ForeshadowBrief[];
+}

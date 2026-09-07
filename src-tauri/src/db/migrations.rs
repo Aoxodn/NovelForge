@@ -168,6 +168,68 @@ const MIGRATIONS: &[(i64, &str)] = &[(
         saves INTEGER NOT NULL DEFAULT 0           -- 保存次数
     );
     ",
+),
+(
+    4,
+    // V4：大纲系统——全书大纲（主线 / 设定 / 梗概）。
+    // 卷大纲（volumes.summary）与章纲（chapters.summary / notes）V1 已有，无需改动。
+    "
+    ALTER TABLE project_info ADD COLUMN outline TEXT NOT NULL DEFAULT '';
+    ",
+),
+(
+    5,
+    // V5：回收站——章节软删除（deleted_at 为 NULL 即正常章节）。
+    // 删除章节先入回收站，7 天后打开回收站时自动彻底清除。
+    "
+    ALTER TABLE chapters ADD COLUMN deleted_at TEXT;
+    ",
+),
+(
+    6,
+    // V6：可视化写小说——故事地图 / 剧情线 / 伏笔（设计文档 V1.1）。
+    // 节点 = 章节（不建独立 node 表）；坐标归一化 0..1；弧线单归属挂章节，
+    // 边级 arc_id 负责单条连线（伏笔）归类。回收站章节在图中隐藏，
+    // 彻底删除时关联边随 ON DELETE CASCADE 自动清理。
+    "
+    -- ① 剧情线（总览泳道 / 伏笔归类的载体）：先建被引用表，再对 chapters 做 ALTER
+    CREATE TABLE IF NOT EXISTS story_arcs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        title      TEXT NOT NULL,
+        kind       INTEGER NOT NULL DEFAULT 0,   -- 0=主线 1=支线 2=暗线
+        color      TEXT NOT NULL DEFAULT '',     -- 泳道/节点着色（前端可覆写）
+        summary    TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+
+    -- ② 章节扩展：节点类型、画布坐标、弧线归属（均不影响现有读写路径）
+    ALTER TABLE chapters ADD COLUMN node_type INTEGER NOT NULL DEFAULT 0;  -- 0=章节 1=事件 2=转折 3=支线 4=结局
+    ALTER TABLE chapters ADD COLUMN map_x REAL;  -- 归一化 0..1；NULL = 未排布
+    ALTER TABLE chapters ADD COLUMN map_y REAL;
+    ALTER TABLE chapters ADD COLUMN arc_id INTEGER REFERENCES story_arcs(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_chapters_arc ON chapters(arc_id);
+
+    -- ③ 连线（0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收）
+    --    顺序边是派生数据（自动布局整体重建），不加唯一约束——
+    --    同对章节间埋多条伏笔是合理场景
+    CREATE TABLE IF NOT EXISTS story_edges (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_node  INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        to_node    INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        edge_type  INTEGER NOT NULL,
+        arc_id     INTEGER REFERENCES story_arcs(id) ON DELETE SET NULL,
+        label      TEXT NOT NULL DEFAULT '',     -- 因果说明 / 伏笔内容
+        status     INTEGER NOT NULL DEFAULT 0,   -- 伏笔：0=活跃 1=已回收 2=失效；其余类型固定 0
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        CHECK (from_node != to_node)
+    );
+    CREATE INDEX IF NOT EXISTS idx_edges_from ON story_edges(from_node);
+    CREATE INDEX IF NOT EXISTS idx_edges_to   ON story_edges(to_node);
+    CREATE INDEX IF NOT EXISTS idx_edges_arc  ON story_edges(arc_id);
+    ",
 )];
 
 /// 应用所有未执行的迁移

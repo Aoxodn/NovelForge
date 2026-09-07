@@ -159,7 +159,8 @@ pub fn export_novel(
     output_path: String,
 ) -> Result<ExportResult> {
     state.with_project(|db| {
-        // 1) 按范围查询章节（卷序 + 章序）
+        // 1) 按范围查询章节（卷序 + 章序全局排序）。
+        //    node_type = 0：纯规划节点（事件 / 转折等大纲卡片）不进成稿（V6）
         let (sql, binds): (&str, Vec<i64>) = match scope.as_str() {
             "volume" => {
                 let v = volume_id
@@ -167,7 +168,7 @@ pub fn export_novel(
                 (
                     "SELECT v.title, c.title, c.content
                      FROM chapters c JOIN volumes v ON c.volume_id = v.id
-                     WHERE c.volume_id = ?1
+                     WHERE c.volume_id = ?1 AND c.deleted_at IS NULL AND c.node_type = 0
                      ORDER BY v.sort_order, c.sort_order, c.id",
                     vec![v],
                 )
@@ -178,13 +179,14 @@ pub fn export_novel(
                 (
                     "SELECT v.title, c.title, c.content
                      FROM chapters c JOIN volumes v ON c.volume_id = v.id
-                     WHERE c.id = ?1",
+                     WHERE c.id = ?1 AND c.deleted_at IS NULL AND c.node_type = 0",
                     vec![c],
                 )
             }
             _ => (
                 "SELECT v.title, c.title, c.content
                  FROM chapters c JOIN volumes v ON c.volume_id = v.id
+                 WHERE c.deleted_at IS NULL AND c.node_type = 0
                  ORDER BY v.sort_order, c.sort_order, c.id",
                 vec![],
             ),

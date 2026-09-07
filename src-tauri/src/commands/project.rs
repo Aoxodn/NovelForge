@@ -141,6 +141,18 @@ pub fn close_project(state: State<'_, AppState>) -> Result<()> {
     Ok(())
 }
 
+/// 保存全书大纲（主线 / 设定 / 梗概，存 project_info.outline）
+#[tauri::command]
+pub fn update_project_outline(state: State<'_, AppState>, outline: String) -> Result<()> {
+    state.with_project(|db| {
+        db.conn.execute(
+            "UPDATE project_info SET outline = ?1, updated_at = datetime('now','localtime') WHERE id = 1",
+            params![outline],
+        )?;
+        Ok(())
+    })
+}
+
 /// 最近打开的项目列表
 #[tauri::command]
 pub fn list_recent_projects(state: State<'_, AppState>) -> Result<Vec<RecentProject>> {

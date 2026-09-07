@@ -9,6 +9,8 @@ pub struct ProjectInfo {
     pub name: String,
     pub author: String,
     pub description: String,
+    /// 全书大纲：主线 / 设定 / 梗概（V4 迁移新增）
+    pub outline: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -36,6 +38,8 @@ pub struct ChapterMeta {
     pub word_count: i64,
     pub sort_order: i32,
     pub status: i32,
+    /// 0=正文 1=事件 2=转折 3=支线 4=结局（V6：规划节点标注，0 = 普通章节）
+    pub node_type: i32,
     pub updated_at: String,
 }
 
@@ -53,6 +57,18 @@ pub struct ChapterDetail {
     pub summary: String,
     pub notes: String,
     pub updated_at: String,
+}
+
+/// 回收站章节条目
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedChapter {
+    pub id: i64,
+    pub volume_id: i64,
+    pub volume_title: String,
+    pub title: String,
+    pub word_count: i64,
+    pub deleted_at: String,
 }
 
 /// 项目统计
@@ -260,7 +276,7 @@ pub struct ChapterPresenceView {
 // ========== 码字统计（阶段 6） ==========
 
 /// 单日码字记录
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyWords {
     /// YYYY-MM-DD（本地时区）
@@ -269,7 +285,7 @@ pub struct DailyWords {
 }
 
 /// 码字统计仪表盘数据
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WritingStats {
     /// 今日净增字数
@@ -286,4 +302,128 @@ pub struct WritingStats {
     /// 全书当前总字数 / 章节数
     pub total_words: i64,
     pub chapter_count: i64,
+}
+
+// ========== 故事地图 / 可视化写小说（V6） ==========
+
+/// 剧情线（主线 / 支线 / 暗线）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryArc {
+    pub id: i64,
+    pub title: String,
+    /// 0=主线 1=支线 2=暗线
+    pub kind: i32,
+    /// 泳道 / 节点着色（空 = 前端按 id 取调色板）
+    pub color: String,
+    pub summary: String,
+}
+
+/// 故事图节点 = 章节元数据 + 画布坐标 + 节点类型 + 弧线归属
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryNode {
+    pub id: i64,
+    pub volume_id: i64,
+    pub volume_title: String,
+    pub title: String,
+    pub summary: String,
+    pub word_count: i64,
+    /// 0=草稿 1=完稿
+    pub status: i32,
+    /// 0=章节 1=事件 2=转折 3=支线 4=结局
+    pub node_type: i32,
+    /// 画布坐标，归一化 0..1；NULL = 未排布（自动布局可覆盖）
+    pub map_x: Option<f64>,
+    pub map_y: Option<f64>,
+    pub arc_id: Option<i64>,
+    /// 全局章节序（0 起，按 卷序+章序 排列；一切跨章计算统一口径）
+    pub global_order: i64,
+}
+
+/// 连线（0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryEdge {
+    pub id: i64,
+    pub from_node: i64,
+    pub to_node: i64,
+    pub edge_type: i32,
+    pub arc_id: Option<i64>,
+    /// 因果说明 / 伏笔内容
+    pub label: String,
+    /// 伏笔：0=活跃 1=已回收 2=失效；其余类型固定 0
+    pub status: i32,
+}
+
+/// 故事图全量（打开地图 / 总览时一次拉取）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryGraph {
+    pub nodes: Vec<StoryNode>,
+    pub edges: Vec<StoryEdge>,
+    pub arcs: Vec<StoryArc>,
+}
+
+/// 伏笔总览行
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeshadowView {
+    pub id: i64,
+    pub label: String,
+    /// 0=活跃 1=已回收 2=失效
+    pub status: i32,
+    pub from_node: i64,
+    pub from_title: String,
+    pub to_node: i64,
+    pub to_title: String,
+    /// 跨度 = 全局章节序差（回收端 − 埋设端，>= 0）
+    pub span: i64,
+    /// 跨度超过阈值（settings 表，默认 10 章）
+    pub overdue: bool,
+    pub arc_id: Option<i64>,
+    /// 任一端章节在回收站（软删除，图中隐藏但边保留）
+    pub from_trashed: bool,
+    pub to_trashed: bool,
+}
+
+/// 相邻节点（章节发展图的上 / 下游项）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryNeighbor {
+    pub edge_id: i64,
+    pub edge_type: i32,
+    pub label: String,
+    pub node: StoryNode,
+}
+
+/// 本章伏笔（发展图卡片用）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeshadowBrief {
+    pub edge_id: i64,
+    pub label: String,
+    /// 0=活跃 1=已回收 2=失效
+    pub status: i32,
+    /// 对端章节（埋设视角 = 回收章；回收视角 = 埋设章）
+    pub other_node: StoryNode,
+    /// 跨度（全局章节序差，>= 0）
+    pub span: i64,
+    pub overdue: bool,
+    /// 本章埋设的伏笔：回收端已完稿且仍活跃 → 前端出「标记已回收」轻提示
+    pub can_resolve: bool,
+}
+
+/// 单章故事上下文（右栏「本章发展」卡）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterStoryContext {
+    pub chapter_id: i64,
+    pub arc: Option<StoryArc>,
+    pub upstream: Vec<StoryNeighbor>,
+    pub downstream: Vec<StoryNeighbor>,
+    /// 本章埋设的伏笔
+    pub planted: Vec<ForeshadowBrief>,
+    /// 本章回收的伏笔
+    pub resolved: Vec<ForeshadowBrief>,
 }

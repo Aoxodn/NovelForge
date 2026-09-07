@@ -4,7 +4,7 @@
 //!
 //! | 级别 | 规则 | 基础分 | 强规则 |
 //! |------|------|--------|--------|
-//! | L1 | 中文「第X章 / 第X回 / 第X节」 | 0.99 | 是 |
+//! | L1 | 中文「第X章 / 第X回」；「第X节」需分隔符校验 | 0.99 / 0.95 | 是 |
 //! | L2 | 英文「Chapter N」 | 0.95 | 是 |
 //! | L5 | DOCX 标题样式（Heading/标题N） | 0.90 | 是 |
 //! | L3 | 数字「1. / 2、 / 01.」 | 0.80 | 否 |
@@ -63,7 +63,17 @@ struct Candidate {
 // - 标题长度限制，防止长正文行误判
 static RE_ZH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"^[ \t\u{3000}]*第\s*([0-9]{1,7}|[零〇一二两三四五六七八九十百千万]{1,12})\s*[章节回]\s*\S{0,40}$",
+        r"^[ \t\u{3000}]*第\s*([0-9]{1,7}|[零〇一二两三四五六七八九十百千万]{1,12})\s*[章回]\s*\S{0,40}$",
+    )
+    .unwrap()
+});
+// 「第X节」单独成规则：课时 / 小节在正文叙述里高频出现（用户反馈案例：
+// 「第二节，是外语课，外语…」「第三节课是数学课。」），因此要求
+// 「节」后必须跟分隔符（空白 / 冒号 / 破折号）或直接行尾才算标题，
+// 紧贴后续文字的（「第三节课…」）一律视为正文。
+static RE_ZH_JIE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^[ \t\u{3000}]*第\s*([0-9]{1,7}|[零〇一二两三四五六七八九十百千万]{1,12})\s*节(?:[\s：:·\-—]\S{0,40})?$",
     )
     .unwrap()
 });
@@ -180,6 +190,20 @@ fn classify(p: &ImportedParagraph, idx: usize) -> Option<Candidate> {
             .or_else(|| cn_num_to_int(num_str));
         score = 0.99;
         rule = "中文章节";
+        number = n;
+        strong = true;
+    } else if let Some(m) = RE_ZH_JIE.captures(text) {
+        // 「节」即使满足分隔符形态，也不接受对白式收尾（「第二节 下课了。」）
+        if ends_like_dialogue(text) {
+            return None;
+        }
+        let num_str = m.get(1).unwrap().as_str();
+        let n = num_str
+            .parse::<i64>()
+            .ok()
+            .or_else(|| cn_num_to_int(num_str));
+        score = 0.95;
+        rule = "中文小节";
         number = n;
         strong = true;
     } else if let Some(m) = RE_EN.captures(text) {
@@ -757,5 +781,54 @@ mod tests {
         let blocks = detect(&paras);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].title, "第十二章 大战起！");
+    }
+
+    // ========== 「第X节」课时叙述误判拒绝（用户反馈的真实案例） ==========
+
+    #[test]
+    fn jie_class_period_sentences_not_detected() {
+        // 校园文正文：课时叙述紧跟在正常章节之间，不得切成章节
+        let mut paras = vec![para("第54章 启明星高中14")];
+        paras.extend(filler(3));
+        paras.push(para("第二节，是外语课，外语老师让大家背课文。"));
+        paras.extend(filler(3));
+        paras.push(para("第三节课是数学课。"));
+        paras.extend(filler(3));
+        paras.push(para("第55章 启明星高中15"));
+        paras.extend(filler(3));
+
+        let blocks = detect(&paras);
+        assert_eq!(blocks.len(), 2, "课时叙述行不应成为章节边界");
+        assert_eq!(blocks[0].title, "第54章 启明星高中14");
+        assert_eq!(blocks[1].title, "第55章 启明星高中15");
+    }
+
+    #[test]
+    fn jie_chapter_titles_still_detected() {
+        // 真正以「节」分章的作品：「节」后带分隔符或到行尾即接受
+        let mut paras = vec![para("第一节 启程")];
+        paras.extend(filler(3));
+        paras.push(para("第二节:抵达"));
+        paras.extend(filler(3));
+        paras.push(para("第三节"));
+        paras.extend(filler(3));
+
+        let blocks = detect(&paras);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].title, "第一节 启程");
+        assert_eq!(blocks[1].title, "第二节:抵达");
+        assert_eq!(blocks[2].title, "第三节");
+    }
+
+    #[test]
+    fn jie_tight_prose_continuation_rejected() {
+        // 「节」后无分隔符直接续字（正文连写）一律不算标题
+        for line in [
+            "第二节课是数学课",
+            "第三节比赛开始了",
+            "第二小节的内容如下",
+        ] {
+            assert!(classify(&para(line), 0).is_none(), "应拒绝正文行：{line}");
+        }
     }
 }

@@ -18,6 +18,7 @@ pub mod names;
 pub mod project;
 pub mod search;
 pub mod stats;
+pub mod story_graph;
 pub mod volume;
 
 use crate::db;

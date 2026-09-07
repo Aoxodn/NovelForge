@@ -20,6 +20,13 @@ import type {
   SearchHit,
   Volume,
   WritingStats,
+  DeletedChapter,
+  NameParams,
+  ChapterStoryContext,
+  ForeshadowView,
+  StoryArc,
+  StoryEdge,
+  StoryGraph,
 } from '../types/models';
 
 // ---------- 项目 ----------
@@ -42,6 +49,9 @@ export const openProject = (path: string) =>
 
 export const closeProject = () => cmd<void>('close_project');
 
+export const updateProjectOutline = (outline: string) =>
+  cmd<void>('update_project_outline', { outline });
+
 export const listRecentProjects = () =>
   cmd<RecentProject[]>('list_recent_projects');
 
@@ -55,6 +65,9 @@ export const createVolume = (title: string) =>
 
 export const renameVolume = (volumeId: number, title: string) =>
   cmd<void>('rename_volume', { volumeId, title });
+
+export const setVolumeSummary = (volumeId: number, summary: string) =>
+  cmd<void>('set_volume_summary', { volumeId, summary });
 
 export const deleteVolume = (volumeId: number) =>
   cmd<void>('delete_volume', { volumeId });
@@ -83,6 +96,10 @@ export const renameChapter = (chapterId: number, title: string) =>
 
 export const setChapterStatus = (chapterId: number, status: number) =>
   cmd<void>('set_chapter_status', { chapterId, status });
+
+/** 保存章纲与作者笔记（不触碰正文） */
+export const setChapterOutline = (chapterId: number, summary: string, notes: string) =>
+  cmd<void>('set_chapter_outline', { chapterId, summary, notes });
 
 export const deleteChapter = (chapterId: number) =>
   cmd<void>('delete_chapter', { chapterId });
@@ -226,5 +243,129 @@ export const rebuildMentions = () => cmd<number>('rebuild_mentions');
 
 export const getWritingStats = () => cmd<WritingStats>('get_writing_stats');
 
-export const generateNames = (kind: NameKind, count?: number) =>
-  cmd<string[]>('generate_names', { kind, count: count ?? null });
+export const generateNames = (kind: NameKind, count?: number, params?: NameParams) =>
+  cmd<string[]>('generate_names', {
+    kind,
+    count: count ?? null,
+    gender: params?.gender ?? null,
+    country: params?.country ?? null,
+    surnameType: params?.surnameType ?? null,
+    surname: params?.surname ?? null,
+    given: params?.given ?? null,
+  });
+
+// ---------- 回收站 ----------
+
+export const listDeletedChapters = () => cmd<DeletedChapter[]>('list_deleted_chapters');
+
+export const restoreChapter = (chapterId: number) =>
+  cmd<void>('restore_chapter', { chapterId });
+
+export const purgeChapter = (chapterId: number) =>
+  cmd<void>('purge_chapter', { chapterId });
+
+// ---------- 批量整理 ----------
+
+/** 卷内章节倒序 */
+export const reverseVolumeChapters = (volumeId: number) =>
+  cmd<void>('reverse_volume_chapters', { volumeId });
+
+/** 全书排版：去段首/行尾空白、删空行；返回被修改章节数 */
+export const formatAllChapters = () => cmd<number>('format_all_chapters');
+
+// ---------- 故事地图 / 全书总览 / 章节发展图（V6：可视化写小说） ----------
+
+/** 全量拉取故事图（节点 / 连线 / 弧线） */
+export const listStoryGraph = () => cmd<StoryGraph>('list_story_graph');
+
+/** 单章故事上下文（右栏「本章发展」卡） */
+export const getChapterStoryContext = (chapterId: number) =>
+  cmd<ChapterStoryContext>('get_chapter_story_context', { chapterId });
+
+/** 伏笔总览（含跨度与超期标记） */
+export const listForeshadows = () => cmd<ForeshadowView[]>('list_foreshadows');
+
+/** 新建剧情线。kind: 0=主线 1=支线 2=暗线 */
+export const createStoryArc = (title: string, kind: number, color = '') =>
+  cmd<StoryArc>('create_story_arc', { title, kind, color });
+
+export const updateStoryArc = (
+  arcId: number,
+  patch: { title: string; kind: number; color: string; summary: string },
+) =>
+  cmd<void>('update_story_arc', {
+    arcId,
+    title: patch.title,
+    kind: patch.kind,
+    color: patch.color,
+    summary: patch.summary,
+  });
+
+/** 删除剧情线（章节与连线不受影响，归属自动清空） */
+export const deleteStoryArc = (arcId: number) =>
+  cmd<void>('delete_story_arc', { arcId });
+
+export const listStoryArcs = () => cmd<StoryArc[]>('list_story_arcs');
+
+/** 设置节点弧线归属（null = 移出所有剧情线） */
+export const setNodeArc = (chapterId: number, arcId: number | null) =>
+  cmd<void>('set_node_arc', { chapterId, arcId });
+
+/** 保存画布坐标（拖拽防抖落库，归一化 0..1） */
+export const moveStoryNode = (chapterId: number, mapX: number, mapY: number) =>
+  cmd<void>('move_story_node', { chapterId, mapX, mapY });
+
+/** 新建规划节点（空章节 + node_type，1=事件 2=转折 3=支线 4=结局） */
+export const createPlanningNode = (
+  volumeId: number,
+  title: string,
+  nodeType: number,
+) =>
+  cmd<ChapterDetail>('create_planning_node', {
+    volumeId,
+    title,
+    nodeType,
+  });
+
+/** 画布移除节点：清坐标 + 删关联边（章节保留在目录树） */
+export const removeStoryNode = (chapterId: number) =>
+  cmd<void>('remove_story_node', { chapterId });
+
+/** 自动布局：按全局章节序蛇形铺排并重建顺序边；返回节点数 */
+export const autoLayoutStoryMap = () => cmd<number>('auto_layout_story_map');
+
+/** 建连线。edgeType: 0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收 */
+export const createStoryEdge = (opts: {
+  fromNode: number;
+  toNode: number;
+  edgeType: number;
+  arcId: number | null;
+  label: string;
+}) =>
+  cmd<StoryEdge>('create_story_edge', {
+    fromNode: opts.fromNode,
+    toNode: opts.toNode,
+    edgeType: opts.edgeType,
+    arcId: opts.arcId,
+    label: opts.label,
+  });
+
+/** 编辑连线（label / 所属弧线） */
+export const updateStoryEdge = (
+  edgeId: number,
+  label: string,
+  arcId: number | null,
+) => cmd<void>('update_story_edge', { edgeId, label, arcId });
+
+/** 伏笔状态：0=活跃 1=已回收 2=失效 */
+export const setForeshadowStatus = (edgeId: number, status: number) =>
+  cmd<void>('set_foreshadow_status', { edgeId, status });
+
+export const deleteStoryEdge = (edgeId: number) =>
+  cmd<void>('delete_story_edge', { edgeId });
+
+export const getForeshadowThreshold = () =>
+  cmd<number>('get_foreshadow_threshold');
+
+export const setForeshadowThreshold = (threshold: number) =>
+  cmd<void>('set_foreshadow_threshold', { threshold });

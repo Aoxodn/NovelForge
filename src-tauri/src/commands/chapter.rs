@@ -2,7 +2,7 @@
 
 use crate::commands::AppState;
 use crate::error::{AppError, Result};
-use crate::models::{ChapterDetail, ChapterVersionMeta, SaveResult};
+use crate::models::{ChapterDetail, ChapterVersionMeta, DeletedChapter, SaveResult};
 use crate::text;
 use rusqlite::{params, Connection};
 use tauri::State;
@@ -10,7 +10,7 @@ use tauri::State;
 /// 每章保留的历史版本数量上限，超出时清理最旧的
 const MAX_VERSIONS_PER_CHAPTER: i64 = 50;
 
-fn fetch_chapter_detail(conn: &Connection, id: i64) -> Result<ChapterDetail> {
+pub(crate) fn fetch_chapter_detail(conn: &Connection, id: i64) -> Result<ChapterDetail> {
     conn.query_row(
         "SELECT id, volume_id, title, content, word_count, char_count, status, summary, notes, updated_at
          FROM chapters WHERE id = ?1",
@@ -58,14 +58,18 @@ pub fn create_chapter(
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),
             _ => {
                 // 默认标题：全书章节总数 + 1
-                let total: i64 =
-                    db.conn.query_row("SELECT COUNT(*) FROM chapters", [], |r| r.get(0))?;
+                let total: i64 = db.conn.query_row(
+                    "SELECT COUNT(*) FROM chapters WHERE deleted_at IS NULL",
+                    [],
+                    |r| r.get(0),
+                )?;
                 format!("第{}章", total + 1)
             }
         };
 
         let next: i32 = db.conn.query_row(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chapters WHERE volume_id = ?1",
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chapters
+             WHERE volume_id = ?1 AND deleted_at IS NULL",
             params![volume_id],
             |r| r.get(0),
         )?;
@@ -243,16 +247,38 @@ pub fn set_chapter_status(
     })
 }
 
-/// 删除章节（连同其历史版本，外键级联）
+/// 保存章纲与作者笔记（不触碰正文与字数统计）
 #[tauri::command]
-pub fn delete_chapter(state: State<'_, AppState>, chapter_id: i64) -> Result<()> {
+pub fn set_chapter_outline(
+    state: State<'_, AppState>,
+    chapter_id: i64,
+    summary: String,
+    notes: String,
+) -> Result<()> {
     state.with_project(|db| {
-        let tx = db.conn.unchecked_transaction()?;
-        let n = tx.execute("DELETE FROM chapters WHERE id = ?1", params![chapter_id])?;
+        let n = db.conn.execute(
+            "UPDATE chapters SET summary = ?1, notes = ?2, updated_at = datetime('now','localtime') WHERE id = ?3",
+            params![summary, notes, chapter_id],
+        )?;
         if n == 0 {
             return Err(AppError::Msg("章节不存在".into()));
         }
-        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// 删除章节（软删除：进入回收站，7 天后自动彻底清除）
+#[tauri::command]
+pub fn delete_chapter(state: State<'_, AppState>, chapter_id: i64) -> Result<()> {
+    state.with_project(|db| {
+        let n = db.conn.execute(
+            "UPDATE chapters SET deleted_at = datetime('now','localtime')
+             WHERE id = ?1 AND deleted_at IS NULL",
+            params![chapter_id],
+        )?;
+        if n == 0 {
+            return Err(AppError::Msg("章节不存在".into()));
+        }
         Ok(())
     })
 }
@@ -386,5 +412,161 @@ pub fn restore_chapter_version(
         tx.commit()?;
         let _ = v_word;
         fetch_chapter_detail(&db.conn, chapter_id)
+    })
+}
+
+// ---------- 回收站 ----------
+
+/// 回收站列表；同时自动彻底清除超过 7 天的软删除章节（连同其版本快照）
+#[tauri::command]
+pub fn list_deleted_chapters(state: State<'_, AppState>) -> Result<Vec<DeletedChapter>> {
+    state.with_project(|db| {
+        db.conn.execute(
+            "DELETE FROM chapters WHERE deleted_at IS NOT NULL
+             AND deleted_at < datetime('now', '-7 days')",
+            [],
+        )?;
+        let mut stmt = db.conn.prepare(
+            "SELECT c.id, c.volume_id, v.title, c.title, c.word_count, c.deleted_at
+             FROM chapters c JOIN volumes v ON v.id = c.volume_id
+             WHERE c.deleted_at IS NOT NULL
+             ORDER BY c.deleted_at DESC, c.id DESC",
+        )?;
+        let list = stmt
+            .query_map([], |row| {
+                Ok(DeletedChapter {
+                    id: row.get(0)?,
+                    volume_id: row.get(1)?,
+                    volume_title: row.get(2)?,
+                    title: row.get(3)?,
+                    word_count: row.get(4)?,
+                    deleted_at: row.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(list)
+    })
+}
+
+/// 从回收站恢复章节（卷已删除的场景不可能出现：删卷会级联硬删章节）
+#[tauri::command]
+pub fn restore_chapter(state: State<'_, AppState>, chapter_id: i64) -> Result<()> {
+    state.with_project(|db| {
+        let n = db.conn.execute(
+            "UPDATE chapters SET deleted_at = NULL WHERE id = ?1 AND deleted_at IS NOT NULL",
+            params![chapter_id],
+        )?;
+        if n == 0 {
+            return Err(AppError::Msg("章节不在回收站中".into()));
+        }
+        Ok(())
+    })
+}
+
+/// 彻底删除回收站章节（不可恢复，连同历史版本）
+#[tauri::command]
+pub fn purge_chapter(state: State<'_, AppState>, chapter_id: i64) -> Result<()> {
+    state.with_project(|db| {
+        let tx = db.conn.unchecked_transaction()?;
+        let n = tx.execute(
+            "DELETE FROM chapters WHERE id = ?1 AND deleted_at IS NOT NULL",
+            params![chapter_id],
+        )?;
+        tx.commit()?;
+        if n == 0 {
+            return Err(AppError::Msg("章节不在回收站中".into()));
+        }
+        Ok(())
+    })
+}
+
+// ---------- 批量整理 ----------
+
+/// 章节倒序：反转卷内章节顺序
+#[tauri::command]
+pub fn reverse_volume_chapters(state: State<'_, AppState>, volume_id: i64) -> Result<()> {
+    state.with_project(|db| {
+        let ids: Vec<i64> = {
+            let mut stmt = db.conn.prepare(
+                "SELECT id FROM chapters
+                 WHERE volume_id = ?1 AND deleted_at IS NULL
+                 ORDER BY sort_order DESC, id DESC",
+            )?;
+            let ids = stmt
+                .query_map([], |r| r.get::<_, i64>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            ids
+        };
+        if ids.len() < 2 {
+            return Ok(());
+        }
+        let tx = db.conn.unchecked_transaction()?;
+        for (i, id) in ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE chapters SET sort_order = ?1 WHERE id = ?2",
+                params![i as i32, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// 全书排版：规范化所有章节文本（去段首/行尾空白、删除空行）。
+/// 每个被修改的章节先存一条手动快照，可从版本历史恢复。返回被修改的章节数。
+#[tauri::command]
+pub fn format_all_chapters(state: State<'_, AppState>) -> Result<usize> {
+    state.with_project(|db| {
+        let rows: Vec<(i64, String, String, i64)> = {
+            let mut stmt = db.conn.prepare(
+                "SELECT id, title, content, word_count FROM chapters WHERE deleted_at IS NULL",
+            )?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+
+        let tx = db.conn.unchecked_transaction()?;
+        let mut changed = 0usize;
+        for (id, title, content, old_words) in rows {
+            let normalized = text::normalize_text(&content);
+            if normalized == content {
+                continue;
+            }
+            let stats = text::count_text(&normalized);
+            // 原文先存手动快照（version_type=1），可从版本历史恢复
+            tx.execute(
+                "INSERT INTO chapter_versions (chapter_id, title, content, word_count, version_type)
+                 VALUES (?1, ?2, ?3, ?4, 1)",
+                params![id, title, content, old_words],
+            )?;
+            tx.execute(
+                "UPDATE chapters
+                 SET content = ?1, word_count = ?2, char_count = ?3, content_hash = ?4,
+                     updated_at = datetime('now','localtime')
+                 WHERE id = ?5",
+                params![
+                    normalized,
+                    stats.words,
+                    stats.chars,
+                    format!("{:016x}", text::content_fingerprint(&normalized)),
+                    id
+                ],
+            )?;
+            // 与 save_chapter 一致的快照数量上限
+            tx.execute(
+                "DELETE FROM chapter_versions WHERE chapter_id = ?1 AND id NOT IN (
+                     SELECT id FROM chapter_versions WHERE chapter_id = ?1
+                     ORDER BY created_at DESC, id DESC LIMIT ?2
+                 )",
+                params![id, MAX_VERSIONS_PER_CHAPTER],
+            )?;
+            changed += 1;
+        }
+        tx.commit()?;
+        Ok(changed)
     })
 }

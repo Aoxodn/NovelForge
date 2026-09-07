@@ -105,7 +105,7 @@ pub fn get_writing_stats(state: State<'_, AppState>) -> Result<WritingStats> {
             .collect();
 
         let (total_words, chapter_count): (i64, i64) = db.conn.query_row(
-            "SELECT COALESCE(SUM(word_count), 0), COUNT(*) FROM chapters",
+            "SELECT COALESCE(SUM(word_count), 0), COUNT(*) FROM chapters WHERE deleted_at IS NULL",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;

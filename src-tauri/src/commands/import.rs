@@ -88,7 +88,7 @@ pub async fn import_analyze_file(
         let existing = state.with_project(|db| -> Result<Vec<(String, String)>> {
             let mut stmt = db
                 .conn
-                .prepare("SELECT title, content FROM chapters")?;
+                .prepare("SELECT title, content FROM chapters WHERE deleted_at IS NULL")?;
             let mut rows = stmt.query([])?;
             let mut out = Vec::new();
             while let Some(r) = rows.next()? {
@@ -656,7 +656,7 @@ pub fn import_confirm(
         // 3) 事务批量写入
         let tx = db.conn.unchecked_transaction()?;
         let base: i32 = tx.query_row(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chapters WHERE volume_id = ?1",
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chapters WHERE volume_id = ?1 AND deleted_at IS NULL",
             params![vid],
             |r| r.get(0),
         )?;

@@ -169,3 +169,86 @@ export const IconClose = ({ size = 12 }: P) => (
     <path d="M6 6l12 12M18 6L6 18" />
   </svg>
 );
+
+export const IconFocus = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" />
+    <path d="M8 12h8" />
+  </svg>
+);
+
+export const IconCopyChapter = ({ size = 14 }: P) => (
+  <svg {...base(size)}>
+    <rect x="9" y="9" width="12" height="12" rx="2" />
+    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+  </svg>
+);
+
+export const IconMore = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+export const IconSortReverse = ({ size = 14 }: P) => (
+  <svg {...base(size)}>
+    <path d="M7 4v13M7 17l-3-3M7 17l3-3" transform="translate(0,1)" />
+    <path d="M17 20V7M17 7l-3 3M17 7l3 3" transform="translate(0,-1)" />
+  </svg>
+);
+
+export const IconFormat = ({ size = 14 }: P) => (
+  <svg {...base(size)}>
+    <path d="M4 6h16M4 12h10M4 18h13" />
+  </svg>
+);
+
+export const IconTrashRestore = ({ size = 14 }: P) => (
+  <svg {...base(size)}>
+    <path d="M3 12a9 9 0 1 0 2.64-6.36" />
+    <path d="M3 3v6h6" />
+  </svg>
+);
+
+export const IconMap = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <rect x="3" y="4" width="7" height="5" rx="1.5" />
+    <rect x="14" y="4" width="7" height="5" rx="1.5" />
+    <rect x="8.5" y="15" width="7" height="5" rx="1.5" />
+    <path d="M6.5 9v3.5h11V9M12 12.5V15" />
+  </svg>
+);
+
+export const IconOverview = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <path d="M3 6h4M3 12h4M3 18h4" />
+    <circle cx="13" cy="6" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="18" cy="6" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="10" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="16" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="18" r="1.6" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+export const IconFitView = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" />
+  </svg>
+);
+
+export const IconLink = ({ size = 14 }: P) => (
+  <svg {...base(size)}>
+    <path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1.5 1.5" />
+    <path d="M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6L12.5 17.5" />
+  </svg>
+);
+
+export const IconSparkle = ({ size = 14 }: P) => (
+  <svg {...base(size)}>
+    <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />
+    <path d="M18.5 15.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z" />
+  </svg>
+);

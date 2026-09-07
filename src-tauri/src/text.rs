@@ -21,6 +21,18 @@ fn is_han(ch: char) -> bool {
     )
 }
 
+/// 全书排版：规范化单章文本。
+/// - 去除每行首尾空白（含全角空格，统一无段首缩进；导出时可再按需加缩进）
+/// - 丢弃空行（正文以单换行分段，与编辑器 / 导入口径一致）
+pub fn normalize_text(text: &str) -> String {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines.join("\n")
+}
+
 /// 统计字数与字符数
 pub fn count_text(text: &str) -> TextStats {
     let mut words: i64 = 0;

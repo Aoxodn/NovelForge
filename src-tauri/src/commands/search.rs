@@ -46,6 +46,7 @@ pub async fn search_project(
         let mut stmt = db.conn.prepare(
             "SELECT c.id, c.title, v.title, c.content
              FROM chapters c JOIN volumes v ON c.volume_id = v.id
+             WHERE c.deleted_at IS NULL
              ORDER BY v.sort_order, c.sort_order, c.id",
         )?;
         let mut out = Vec::new();

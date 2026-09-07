@@ -9,8 +9,8 @@ use tauri::State;
 fn fetch_volume(conn: &Connection, id: i64) -> Result<Volume> {
     conn.query_row(
         "SELECT v.id, v.title, v.sort_order, v.summary, v.updated_at,
-                (SELECT COUNT(*) FROM chapters c WHERE c.volume_id = v.id),
-                (SELECT COALESCE(SUM(c.word_count), 0) FROM chapters c WHERE c.volume_id = v.id)
+                (SELECT COUNT(*) FROM chapters c WHERE c.volume_id = v.id AND c.deleted_at IS NULL),
+                (SELECT COALESCE(SUM(c.word_count), 0) FROM chapters c WHERE c.volume_id = v.id AND c.deleted_at IS NULL)
          FROM volumes v WHERE v.id = ?1",
         params![id],
         |row| {
@@ -64,6 +64,21 @@ pub fn rename_volume(state: State<'_, AppState>, volume_id: i64, title: String) 
         let n = db.conn.execute(
             "UPDATE volumes SET title = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
             params![title, volume_id],
+        )?;
+        if n == 0 {
+            return Err(AppError::Msg("卷不存在".into()));
+        }
+        Ok(())
+    })
+}
+
+/// 保存卷大纲（卷级纲要：本卷主线 / 目标字数 / 剧情走向）
+#[tauri::command]
+pub fn set_volume_summary(state: State<'_, AppState>, volume_id: i64, summary: String) -> Result<()> {
+    state.with_project(|db| {
+        let n = db.conn.execute(
+            "UPDATE volumes SET summary = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+            params![summary, volume_id],
         )?;
         if n == 0 {
             return Err(AppError::Msg("卷不存在".into()));

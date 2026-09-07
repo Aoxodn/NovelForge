@@ -30,7 +30,7 @@ pub fn read_project_marker(project_dir: &Path) -> Result<String> {
 pub fn build_project_tree(conn: &Connection, project_dir: &Path) -> Result<ProjectTree> {
     let info: ProjectInfo = conn
         .query_row(
-            "SELECT name, author, description, created_at, updated_at
+            "SELECT name, author, description, outline, created_at, updated_at
              FROM project_info WHERE id = 1",
             [],
             |row| {
@@ -38,8 +38,9 @@ pub fn build_project_tree(conn: &Connection, project_dir: &Path) -> Result<Proje
                     name: row.get(0)?,
                     author: row.get(1)?,
                     description: row.get(2)?,
-                    created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
+                    outline: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
                 })
             },
         )
@@ -47,8 +48,8 @@ pub fn build_project_tree(conn: &Connection, project_dir: &Path) -> Result<Proje
 
     let mut stmt = conn.prepare(
         "SELECT v.id, v.title, v.sort_order, v.summary, v.updated_at,
-                (SELECT COUNT(*) FROM chapters c WHERE c.volume_id = v.id),
-                (SELECT COALESCE(SUM(c.word_count), 0) FROM chapters c WHERE c.volume_id = v.id)
+                (SELECT COUNT(*) FROM chapters c WHERE c.volume_id = v.id AND c.deleted_at IS NULL),
+                (SELECT COALESCE(SUM(c.word_count), 0) FROM chapters c WHERE c.volume_id = v.id AND c.deleted_at IS NULL)
          FROM volumes v
          ORDER BY v.sort_order, v.id",
     )?;
@@ -67,8 +68,9 @@ pub fn build_project_tree(conn: &Connection, project_dir: &Path) -> Result<Proje
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, volume_id, title, word_count, sort_order, status, updated_at
+        "SELECT id, volume_id, title, word_count, sort_order, status, node_type, updated_at
          FROM chapters
+         WHERE deleted_at IS NULL
          ORDER BY volume_id, sort_order, id",
     )?;
     let chapters = stmt
@@ -80,7 +82,8 @@ pub fn build_project_tree(conn: &Connection, project_dir: &Path) -> Result<Proje
                 word_count: row.get(3)?,
                 sort_order: row.get(4)?,
                 status: row.get(5)?,
-                updated_at: row.get(6)?,
+                node_type: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -90,7 +93,8 @@ pub fn build_project_tree(conn: &Connection, project_dir: &Path) -> Result<Proje
                 COALESCE(SUM(char_count), 0),
                 (SELECT COUNT(*) FROM volumes),
                 COUNT(*)
-         FROM chapters",
+         FROM chapters
+         WHERE deleted_at IS NULL",
         [],
         |row| {
             Ok(ProjectStats {
