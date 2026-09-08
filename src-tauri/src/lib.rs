@@ -19,6 +19,9 @@ mod import;
 mod matching;
 mod models;
 mod names;
+mod names_dict;
+mod names_person;
+mod char_stopwords;
 mod text;
 
 use commands::AppState;
@@ -64,7 +67,6 @@ pub fn run() {
             commands::chapter::purge_chapter,
             // 批量整理
             commands::chapter::reverse_volume_chapters,
-            commands::chapter::format_all_chapters,
             commands::chapter::move_chapter,
             commands::chapter::list_chapter_versions,
             commands::chapter::restore_chapter_version,
@@ -92,25 +94,54 @@ pub fn run() {
             // 码字统计 / 随机取名（阶段 6）
             commands::stats::get_writing_stats,
             commands::names::generate_names,
-            // 故事地图 / 全书总览 / 章节发展图（V6：可视化写小说）
+            commands::names::list_name_genres,
+            // 故事地图 / 全书总览 / 章节发展图（V7：可视化写小说，节点 = 卷）
             commands::story_graph::list_story_graph,
+            commands::story_graph::get_volume_detail,
             commands::story_graph::get_chapter_story_context,
             commands::story_graph::list_foreshadows,
             commands::story_graph::create_story_arc,
             commands::story_graph::update_story_arc,
             commands::story_graph::delete_story_arc,
             commands::story_graph::list_story_arcs,
-            commands::story_graph::set_node_arc,
             commands::story_graph::move_story_node,
-            commands::story_graph::create_planning_node,
-            commands::story_graph::remove_story_node,
             commands::story_graph::auto_layout_story_map,
             commands::story_graph::create_story_edge,
             commands::story_graph::update_story_edge,
+            commands::story_graph::set_story_edge_bend,
             commands::story_graph::set_foreshadow_status,
             commands::story_graph::delete_story_edge,
             commands::story_graph::get_foreshadow_threshold,
             commands::story_graph::set_foreshadow_threshold,
+            // 人物关系 / 出场统计（v0.9.13 广义人物关系体系）
+            commands::relations::list_character_relations,
+            commands::relations::list_all_character_relations,
+            commands::relations::create_character_relation,
+            commands::relations::update_character_relation,
+            commands::relations::delete_character_relation,
+            commands::relations::list_character_volume_presence,
+            commands::relations::list_volume_character_mentions,
+            // L2 卷内画布（v0.9.13 可编辑化：章节坐标 / 小节 / 章间连线）
+            commands::chapter_canvas::move_chapter_node,
+            commands::chapter_canvas::create_chapter_edge,
+            commands::chapter_canvas::update_chapter_edge,
+            commands::chapter_canvas::delete_chapter_edge,
+            commands::chapter_canvas::set_chapter_edge_bend,
+            commands::chapter_canvas::create_chapter_group,
+            commands::chapter_canvas::rename_chapter_group,
+            commands::chapter_canvas::delete_chapter_group,
+            commands::chapter_canvas::set_chapter_group,
+            commands::chapter_canvas::create_group_edge,
+            commands::chapter_canvas::update_group_edge,
+            commands::chapter_canvas::delete_group_edge,
+            commands::chapter_canvas::set_group_edge_bend,
+            // 人物图谱（v0.9.13 可编辑人物层）
+            commands::canvas_chars::move_character_node,
+            commands::canvas_chars::set_char_volume_pos,
+            commands::canvas_chars::create_character_binding,
+            commands::canvas_chars::delete_character_binding,
+            commands::canvas_chars::list_character_bindings,
+            commands::canvas_chars::list_char_volume_pos,
         ])
         .run(tauri::generate_context!())
         .expect("NovelForge 启动失败");

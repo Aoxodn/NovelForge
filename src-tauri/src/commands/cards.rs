@@ -11,7 +11,7 @@
 
 use crate::commands::AppState;
 use crate::error::{AppError, Result};
-use crate::matching::count_occurrences;
+use crate::matching::{count_occurrences, count_occurrences_with_exclusions};
 use crate::models::{
     ChapterPresenceView, CharacterHeat, CharacterProfile, EntityMentionView, LocationProfile,
 };
@@ -22,6 +22,11 @@ use tauri::State;
 
 /// 解析 characters.aliases（JSON 数组）为字符串列表
 fn parse_aliases(json: &str) -> Vec<String> {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+/// 解析 characters.exclude_words（JSON 数组）为字符串列表
+fn parse_exclude_words(json: &str) -> Vec<String> {
     serde_json::from_str(json).unwrap_or_default()
 }
 
@@ -84,15 +89,16 @@ pub(crate) fn update_chapter_mentions(
     chapter_id: i64,
     content: &str,
 ) -> Result<()> {
-    // 人物（名字 + 别名）
-    let characters: Vec<(i64, Vec<String>)> = {
+    // 人物（名字 + 别名 + 误判排除词）
+    let characters: Vec<(i64, Vec<String>, Vec<String>)> = {
         let mut stmt =
-            conn.prepare("SELECT id, name, aliases FROM characters")?;
+            conn.prepare("SELECT id, name, aliases, exclude_words FROM characters")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     character_patterns(&r.get::<_, String>(1)?, &parse_aliases(&r.get::<_, String>(2)?)),
+                    parse_exclude_words(&r.get::<_, String>(3)?),
                 ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -102,8 +108,8 @@ pub(crate) fn update_chapter_mentions(
         "DELETE FROM character_mentions WHERE chapter_id = ?1",
         params![chapter_id],
     )?;
-    for (cid, pats) in &characters {
-        let n = count_occurrences(content, pats);
+    for (cid, pats, excludes) in &characters {
+        let n = count_occurrences_with_exclusions(content, pats, excludes);
         if n > 0 {
             conn.execute(
                 "INSERT INTO character_mentions (character_id, chapter_id, mention_count)
@@ -140,12 +146,13 @@ pub(crate) fn update_chapter_mentions(
 
 /// 单张人物卡的全量重算（add / update 后调用）
 fn rescan_character(conn: &Connection, character_id: i64) -> Result<()> {
-    let (name, aliases_json): (String, String) = conn.query_row(
-        "SELECT name, aliases FROM characters WHERE id = ?1",
+    let (name, aliases_json, exclude_json): (String, String, String) = conn.query_row(
+        "SELECT name, aliases, exclude_words FROM characters WHERE id = ?1",
         params![character_id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     let pats = character_patterns(&name, &parse_aliases(&aliases_json));
+    let excludes = parse_exclude_words(&exclude_json);
 
     let chapters: Vec<(i64, String)> = {
         let mut stmt = conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL")?;
@@ -159,7 +166,7 @@ fn rescan_character(conn: &Connection, character_id: i64) -> Result<()> {
         params![character_id],
     )?;
     for (ch_id, content) in &chapters {
-        let n = count_occurrences(content, &pats);
+        let n = count_occurrences_with_exclusions(content, &pats, &excludes);
         if n > 0 {
             conn.execute(
                 "INSERT INTO character_mentions (character_id, chapter_id, mention_count)
@@ -204,8 +211,9 @@ fn rescan_location(conn: &Connection, location_id: i64) -> Result<()> {
 
 /// 人物档案组装：基础行 + 聚合统计 + 首末章
 fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> {
-    let mut stmt =
-        conn.prepare("SELECT id, name, aliases, role, notes FROM characters ORDER BY name")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, aliases, role, notes, map_x, map_y, exclude_words FROM characters ORDER BY name",
+    )?;
     let base = stmt
         .query_map([], |r| {
             Ok((
@@ -214,6 +222,9 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
+                r.get::<_, Option<f64>>(5)?,
+                r.get::<_, Option<f64>>(6)?,
+                r.get::<_, String>(7)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -238,7 +249,7 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
 
     Ok(base
         .into_iter()
-        .map(|(id, name, aliases, role, notes)| {
+        .map(|(id, name, aliases, role, notes, map_x, map_y, exclude_words)| {
             let (total, ch_count) = agg.get(&id).copied().unwrap_or((0, 0));
             let end = ends.get(&id);
             CharacterProfile {
@@ -253,6 +264,9 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
                 first_chapter_title: end.map(|e| e.1.clone()),
                 last_chapter_id: end.and_then(|e| e.2),
                 last_chapter_title: end.map(|e| e.3.clone()),
+                map_x,
+                map_y,
+                exclude_words: parse_exclude_words(&exclude_words),
             }
         })
         .collect())
@@ -318,6 +332,7 @@ pub fn add_character(
     aliases: Option<Vec<String>>,
     role: Option<String>,
     notes: Option<String>,
+    exclude_words: Option<Vec<String>>,
 ) -> Result<CharacterProfile> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -330,16 +345,23 @@ pub fn add_character(
         .filter(|a| !a.is_empty() && *a != name)
         .collect();
     let aliases_json = serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".into());
+    // 单字名且未指定排除词时，自动填入内置误判词词典
+    let exclude: Vec<String> = match exclude_words {
+        Some(list) => list.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        None => crate::char_stopwords::default_exclude_for(&name),
+    };
+    let exclude_json = serde_json::to_string(&exclude).unwrap_or_else(|_| "[]".into());
 
     state.with_project(|db| {
         let tx = db.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO characters (name, aliases, status, role, notes) VALUES (?1, ?2, 1, ?3, ?4)",
+            "INSERT INTO characters (name, aliases, status, role, notes, exclude_words) VALUES (?1, ?2, 1, ?3, ?4, ?5)",
             params![
                 name,
                 aliases_json,
                 role.unwrap_or_default(),
-                notes.unwrap_or_default()
+                notes.unwrap_or_default(),
+                exclude_json,
             ],
         )
         .map_err(|e| match e {
@@ -370,6 +392,7 @@ pub fn update_character(
     aliases: Option<Vec<String>>,
     role: Option<String>,
     notes: Option<String>,
+    exclude_words: Option<Vec<String>>,
 ) -> Result<()> {
     state.with_project(|db| {
         let exists: i64 = db.conn.query_row(
@@ -417,6 +440,19 @@ pub fn update_character(
                 "UPDATE characters SET notes = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
                 params![n, character_id],
             )?;
+        }
+        if let Some(list) = exclude_words {
+            let cleaned: Vec<String> = list
+                .iter()
+                .map(|a| a.trim().to_string())
+                .filter(|a| !a.is_empty())
+                .collect();
+            let json = serde_json::to_string(&cleaned).unwrap_or_else(|_| "[]".into());
+            db.conn.execute(
+                "UPDATE characters SET exclude_words = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+                params![json, character_id],
+            )?;
+            rescan = true;
         }
         if rescan {
             rescan_character(&db.conn, character_id)?;
@@ -613,22 +649,24 @@ pub fn get_chapter_presence(
         let mut characters: Vec<EntityMentionView> = {
             let mut stmt = db
                 .conn
-                .prepare("SELECT id, name, aliases FROM characters")?;
+                .prepare("SELECT id, name, aliases, exclude_words FROM characters")?;
             let rows = stmt
                 .query_map([], |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
                     ))
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             rows.into_iter()
-                .map(|(id, name, aliases)| EntityMentionView {
+                .map(|(id, name, aliases, exclude_words)| EntityMentionView {
                     id,
-                    mention_count: count_occurrences(
+                    mention_count: count_occurrences_with_exclusions(
                         &content,
                         &character_patterns(&name, &parse_aliases(&aliases)),
+                        &parse_exclude_words(&exclude_words),
                     ) as i64,
                     name,
                 })
@@ -674,8 +712,8 @@ pub async fn rebuild_mentions(state: State<'_, AppState>) -> Result<i64> {
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             rows
         };
-        let characters: Vec<(i64, Vec<String>)> = {
-            let mut stmt = db.conn.prepare("SELECT id, name, aliases FROM characters")?;
+        let characters: Vec<(i64, Vec<String>, Vec<String>)> = {
+            let mut stmt = db.conn.prepare("SELECT id, name, aliases, exclude_words FROM characters")?;
             let rows = stmt
                 .query_map([], |r| {
                     Ok((
@@ -684,6 +722,7 @@ pub async fn rebuild_mentions(state: State<'_, AppState>) -> Result<i64> {
                             &r.get::<_, String>(1)?,
                             &parse_aliases(&r.get::<_, String>(2)?),
                         ),
+                        parse_exclude_words(&r.get::<_, String>(3)?),
                     ))
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -702,9 +741,9 @@ pub async fn rebuild_mentions(state: State<'_, AppState>) -> Result<i64> {
     // 第二阶段：后台线程精确匹配计数（不碰 DB）
     let (char_hits, loc_hits) = tauri::async_runtime::spawn_blocking(move || {
         let mut char_hits: Vec<(i64, i64, i64)> = Vec::new();
-        for (cid, pats) in &characters {
+        for (cid, pats, excludes) in &characters {
             for (ch_id, content) in &chapters {
-                let n = count_occurrences(content, pats);
+                let n = count_occurrences_with_exclusions(content, pats, excludes);
                 if n > 0 {
                     char_hits.push((*cid, *ch_id, n as i64));
                 }

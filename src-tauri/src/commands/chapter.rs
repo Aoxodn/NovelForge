@@ -493,7 +493,7 @@ pub fn reverse_volume_chapters(state: State<'_, AppState>, volume_id: i64) -> Re
                  ORDER BY sort_order DESC, id DESC",
             )?;
             let ids = stmt
-                .query_map([], |r| r.get::<_, i64>(0))?
+                .query_map(params![volume_id], |r| r.get::<_, i64>(0))?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             ids
         };
@@ -509,64 +509,5 @@ pub fn reverse_volume_chapters(state: State<'_, AppState>, volume_id: i64) -> Re
         }
         tx.commit()?;
         Ok(())
-    })
-}
-
-/// 全书排版：规范化所有章节文本（去段首/行尾空白、删除空行）。
-/// 每个被修改的章节先存一条手动快照，可从版本历史恢复。返回被修改的章节数。
-#[tauri::command]
-pub fn format_all_chapters(state: State<'_, AppState>) -> Result<usize> {
-    state.with_project(|db| {
-        let rows: Vec<(i64, String, String, i64)> = {
-            let mut stmt = db.conn.prepare(
-                "SELECT id, title, content, word_count FROM chapters WHERE deleted_at IS NULL",
-            )?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
-        };
-
-        let tx = db.conn.unchecked_transaction()?;
-        let mut changed = 0usize;
-        for (id, title, content, old_words) in rows {
-            let normalized = text::normalize_text(&content);
-            if normalized == content {
-                continue;
-            }
-            let stats = text::count_text(&normalized);
-            // 原文先存手动快照（version_type=1），可从版本历史恢复
-            tx.execute(
-                "INSERT INTO chapter_versions (chapter_id, title, content, word_count, version_type)
-                 VALUES (?1, ?2, ?3, ?4, 1)",
-                params![id, title, content, old_words],
-            )?;
-            tx.execute(
-                "UPDATE chapters
-                 SET content = ?1, word_count = ?2, char_count = ?3, content_hash = ?4,
-                     updated_at = datetime('now','localtime')
-                 WHERE id = ?5",
-                params![
-                    normalized,
-                    stats.words,
-                    stats.chars,
-                    format!("{:016x}", text::content_fingerprint(&normalized)),
-                    id
-                ],
-            )?;
-            // 与 save_chapter 一致的快照数量上限
-            tx.execute(
-                "DELETE FROM chapter_versions WHERE chapter_id = ?1 AND id NOT IN (
-                     SELECT id FROM chapter_versions WHERE chapter_id = ?1
-                     ORDER BY created_at DESC, id DESC LIMIT ?2
-                 )",
-                params![id, MAX_VERSIONS_PER_CHAPTER],
-            )?;
-            changed += 1;
-        }
-        tx.commit()?;
-        Ok(changed)
     })
 }

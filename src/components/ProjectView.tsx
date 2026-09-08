@@ -42,9 +42,14 @@ export function ProjectView() {
   const focusMode = useAppStore((s) => s.focusMode);
   const viewMode = useAppStore((s) => s.viewMode);
 
-  /** 返回首页：先播关书动画，动画结束后再保存落库并切换视图 */
+  /** 返回：在故事地图 / 总览等视图时先回写作界面（避免误退项目），
+   *  已在写作界面才走「关书动画 → 退出项目」流程 */
   const handleBack = () => {
     if (closing) return;
+    if (useAppStore.getState().viewMode !== 'editor') {
+      useAppStore.getState().setViewMode('editor');
+      return;
+    }
     setClosing(true);
     setTimeout(async () => {
       // 返回前确保未保存内容落库
@@ -90,8 +95,11 @@ export function ProjectView() {
       } else if ((e.ctrlKey && e.key.toLowerCase() === 'j') || e.key === 'F11') {
         e.preventDefault();
         useAppStore.getState().toggleFocusMode();
-      } else if (e.key === 'Escape' && useAppStore.getState().focusMode) {
-        useAppStore.getState().toggleFocusMode();
+      } else if (e.key === 'Escape') {
+        // Esc 逐层退出：专注模式 → 故事地图 / 总览视图 →（编辑界面内不拦截）
+        const s = useAppStore.getState();
+        if (s.focusMode) s.toggleFocusMode();
+        else if (s.viewMode !== 'editor') s.setViewMode('editor');
       }
     };
     window.addEventListener('keydown', handler);

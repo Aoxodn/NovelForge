@@ -7,3 +7,9 @@ releases
 .DS_Store
 TEST1
 .trae-html-share-packages
+__pycache__
+*.pyc
+*.pyo
+Thumbs.db
+desktop.ini
+*.log

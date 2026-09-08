@@ -14,6 +14,7 @@ import type {
   ImportResult,
   LocationProfile,
   NameKind,
+  NameGenre,
   ProjectTree,
   RecentProject,
   SaveResult,
@@ -27,6 +28,14 @@ import type {
   StoryArc,
   StoryEdge,
   StoryGraph,
+  VolumeDetail,
+  CharacterRelation,
+  CharacterVolumePresence,
+  ChapterEdge,
+  ChapterGroup,
+  GroupEdge,
+  CharacterBinding,
+  CharacterCanvasPos,
 } from '../types/models';
 
 // ---------- 项目 ----------
@@ -60,8 +69,8 @@ export const removeRecentProject = (path: string) =>
 
 // ---------- 卷 ----------
 
-export const createVolume = (title: string) =>
-  cmd<Volume>('create_volume', { title });
+export const createVolume = (title: string, mapX?: number, mapY?: number) =>
+  cmd<Volume>('create_volume', { title, mapX: mapX ?? null, mapY: mapY ?? null });
 
 export const renameVolume = (volumeId: number, title: string) =>
   cmd<void>('rename_volume', { volumeId, title });
@@ -182,12 +191,14 @@ export const addCharacter = (
   aliases?: string[],
   role?: string,
   notes?: string,
+  excludeWords?: string[],
 ) =>
   cmd<CharacterProfile>('add_character', {
     name,
     aliases: aliases ?? null,
     role: role ?? null,
     notes: notes ?? null,
+    excludeWords: excludeWords ?? null,
   });
 
 export const updateCharacter = (
@@ -197,6 +208,7 @@ export const updateCharacter = (
     aliases?: string[];
     role?: string;
     notes?: string;
+    excludeWords?: string[];
   },
 ) =>
   cmd<void>('update_character', {
@@ -205,6 +217,7 @@ export const updateCharacter = (
     aliases: patch.aliases ?? null,
     role: patch.role ?? null,
     notes: patch.notes ?? null,
+    excludeWords: patch.excludeWords ?? null,
   });
 
 export const deleteCharacter = (characterId: number) =>
@@ -247,12 +260,15 @@ export const generateNames = (kind: NameKind, count?: number, params?: NameParam
   cmd<string[]>('generate_names', {
     kind,
     count: count ?? null,
+    genre: params?.genre ?? null,
     gender: params?.gender ?? null,
     country: params?.country ?? null,
     surnameType: params?.surnameType ?? null,
     surname: params?.surname ?? null,
     given: params?.given ?? null,
   });
+
+export const listNameGenres = () => cmd<NameGenre[]>('list_name_genres');
 
 // ---------- 回收站 ----------
 
@@ -270,13 +286,14 @@ export const purgeChapter = (chapterId: number) =>
 export const reverseVolumeChapters = (volumeId: number) =>
   cmd<void>('reverse_volume_chapters', { volumeId });
 
-/** 全书排版：去段首/行尾空白、删空行；返回被修改章节数 */
-export const formatAllChapters = () => cmd<number>('format_all_chapters');
+// ---------- 故事地图 / 全书总览 / 章节发展图（V7：可视化写小说，节点 = 卷） ----------
 
-// ---------- 故事地图 / 全书总览 / 章节发展图（V6：可视化写小说） ----------
-
-/** 全量拉取故事图（节点 / 连线 / 弧线） */
+/** 全量拉取故事图（卷节点 / 连线 / 弧线） */
 export const listStoryGraph = () => cmd<StoryGraph>('list_story_graph');
+
+/** 卷内视图：卷节点 + 本卷章节列表 */
+export const getVolumeDetail = (volumeId: number) =>
+  cmd<VolumeDetail>('get_volume_detail', { volumeId });
 
 /** 单章故事上下文（右栏「本章发展」卡） */
 export const getChapterStoryContext = (chapterId: number) =>
@@ -301,45 +318,27 @@ export const updateStoryArc = (
     summary: patch.summary,
   });
 
-/** 删除剧情线（章节与连线不受影响，归属自动清空） */
+/** 删除剧情线（连线不受影响，归属自动清空） */
 export const deleteStoryArc = (arcId: number) =>
   cmd<void>('delete_story_arc', { arcId });
 
 export const listStoryArcs = () => cmd<StoryArc[]>('list_story_arcs');
 
-/** 设置节点弧线归属（null = 移出所有剧情线） */
-export const setNodeArc = (chapterId: number, arcId: number | null) =>
-  cmd<void>('set_node_arc', { chapterId, arcId });
+/** 保存节点画布坐标（拖拽松手落库，归一化） */
+export const moveStoryNode = (volumeId: number, mapX: number, mapY: number) =>
+  cmd<void>('move_story_node', { volumeId, mapX, mapY });
 
-/** 保存画布坐标（拖拽防抖落库，归一化 0..1） */
-export const moveStoryNode = (chapterId: number, mapX: number, mapY: number) =>
-  cmd<void>('move_story_node', { chapterId, mapX, mapY });
-
-/** 新建规划节点（空章节 + node_type，1=事件 2=转折 3=支线 4=结局） */
-export const createPlanningNode = (
-  volumeId: number,
-  title: string,
-  nodeType: number,
-) =>
-  cmd<ChapterDetail>('create_planning_node', {
-    volumeId,
-    title,
-    nodeType,
-  });
-
-/** 画布移除节点：清坐标 + 删关联边（章节保留在目录树） */
-export const removeStoryNode = (chapterId: number) =>
-  cmd<void>('remove_story_node', { chapterId });
-
-/** 自动布局：按全局章节序蛇形铺排并重建顺序边；返回节点数 */
+/** 自动布局：按剧情线分层泳道重排并落库；返回节点数 */
 export const autoLayoutStoryMap = () => cmd<number>('auto_layout_story_map');
 
-/** 建连线。edgeType: 0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收 */
+/** 建连线（两端 = 卷）。伏笔（edgeType=4）可带章级锚点，null = 卷级 */
 export const createStoryEdge = (opts: {
   fromNode: number;
   toNode: number;
   edgeType: number;
   arcId: number | null;
+  fromChapterId: number | null;
+  toChapterId: number | null;
   label: string;
 }) =>
   cmd<StoryEdge>('create_story_edge', {
@@ -347,6 +346,8 @@ export const createStoryEdge = (opts: {
     toNode: opts.toNode,
     edgeType: opts.edgeType,
     arcId: opts.arcId,
+    fromChapterId: opts.fromChapterId,
+    toChapterId: opts.toChapterId,
     label: opts.label,
   });
 
@@ -356,6 +357,10 @@ export const updateStoryEdge = (
   label: string,
   arcId: number | null,
 ) => cmd<void>('update_story_edge', { edgeId, label, arcId });
+
+/** 保存连线手动弧度（拖弯落库，世界像素 ±400） */
+export const setStoryEdgeBend = (edgeId: number, bend: number) =>
+  cmd<void>('set_story_edge_bend', { edgeId, bend });
 
 /** 伏笔状态：0=活跃 1=已回收 2=失效 */
 export const setForeshadowStatus = (edgeId: number, status: number) =>
@@ -369,3 +374,173 @@ export const getForeshadowThreshold = () =>
 
 export const setForeshadowThreshold = (threshold: number) =>
   cmd<void>('set_foreshadow_threshold', { threshold });
+
+// ---------- 人物关系 / 出场统计（v0.9.13 广义人物关系体系） ----------
+
+/** 人物关系列表（画布隔离口径）。不传 = 仅跨卷（L1）；传卷 id = 仅该卷（L2） */
+export const listCharacterRelations = (volumeId?: number) =>
+  cmd<CharacterRelation[]>('list_character_relations', { volumeId: volumeId ?? null });
+
+/** 全部人物关系（跨卷 + 各卷），仅供人物卡管理视图 */
+export const listAllCharacterRelations = () =>
+  cmd<CharacterRelation[]>('list_all_character_relations');
+
+export const createCharacterRelation = (opts: {
+  fromChar: number;
+  toChar: number;
+  relCategory: number;
+  relType: string;
+  label: string;
+  direction: number;
+  volumeId: number | null;
+}) =>
+  cmd<CharacterRelation>('create_character_relation', {
+    fromChar: opts.fromChar,
+    toChar: opts.toChar,
+    relCategory: opts.relCategory,
+    relType: opts.relType,
+    label: opts.label,
+    direction: opts.direction,
+    volumeId: opts.volumeId,
+  });
+
+export const updateCharacterRelation = (
+  relationId: number,
+  opts: {
+    relCategory: number;
+    relType: string;
+    label: string;
+    direction: number;
+    volumeId: number | null;
+  },
+) =>
+  cmd<void>('update_character_relation', {
+    relationId,
+    relCategory: opts.relCategory,
+    relType: opts.relType,
+    label: opts.label,
+    direction: opts.direction,
+    volumeId: opts.volumeId,
+  });
+
+export const deleteCharacterRelation = (relationId: number) =>
+  cmd<void>('delete_character_relation', { relationId });
+
+/** 人物 × 卷出场统计（画布人物层数据源，character_mentions 按卷聚合） */
+export const listCharacterVolumePresence = () =>
+  cmd<CharacterVolumePresence[]>('list_character_volume_presence');
+
+/** 卷内按章的人物提及（L2 人物节点定位数据源） */
+export const listVolumeCharacterMentions = (volumeId: number) =>
+  cmd<{ chapterId: number; characterId: number; mentionCount: number }[]>(
+    'list_volume_character_mentions',
+    { volumeId },
+  );
+
+// ---------- L2 卷内画布（v0.9.13 可编辑化：章节坐标 / 小节 / 章间连线） ----------
+
+/** 保存章节画布坐标（拖动松手落库，归一化） */
+export const moveChapterNode = (chapterId: number, mapX: number, mapY: number) =>
+  cmd<void>('move_chapter_node', { chapterId, mapX, mapY });
+
+/** 建章间连线（同卷）。伏笔（edgeType=4）label 必填 */
+export const createChapterEdge = (opts: {
+  fromChapter: number;
+  toChapter: number;
+  edgeType: number;
+  label: string;
+}) =>
+  cmd<ChapterEdge>('create_chapter_edge', {
+    fromChapter: opts.fromChapter,
+    toChapter: opts.toChapter,
+    edgeType: opts.edgeType,
+    label: opts.label,
+  });
+
+/** 编辑章间连线（label；伏笔可流转 status） */
+export const updateChapterEdge = (edgeId: number, label: string, status: number) =>
+  cmd<void>('update_chapter_edge', { edgeId, label, status });
+
+export const deleteChapterEdge = (edgeId: number) =>
+  cmd<void>('delete_chapter_edge', { edgeId });
+
+/** 保存章间连线手动弧度（拖弯落库） */
+export const setChapterEdgeBend = (edgeId: number, bend: number) =>
+  cmd<void>('set_chapter_edge_bend', { edgeId, bend });
+
+export const createChapterGroup = (volumeId: number, title: string) =>
+  cmd<ChapterGroup>('create_chapter_group', { volumeId, title });
+
+export const renameChapterGroup = (groupId: number, title: string) =>
+  cmd<void>('rename_chapter_group', { groupId, title });
+
+/** 删除小节（章节保留，仅解除分组） */
+export const deleteChapterGroup = (groupId: number) =>
+  cmd<void>('delete_chapter_group', { groupId });
+
+/** 章节加入 / 移出小节（groupId = null 移出） */
+export const setChapterGroup = (chapterId: number, groupId: number | null) =>
+  cmd<void>('set_chapter_group', { chapterId, groupId });
+
+/** 建小节连线（组框拖出：目标小节 / 目标章节二选一）。伏笔 label 必填 */
+export const createGroupEdge = (opts: {
+  volumeId: number;
+  fromGroup: number;
+  toGroup: number | null;
+  toChapter: number | null;
+  edgeType: number;
+  label: string;
+}) =>
+  cmd<GroupEdge>('create_group_edge', {
+    volumeId: opts.volumeId,
+    fromGroup: opts.fromGroup,
+    toGroup: opts.toGroup,
+    toChapter: opts.toChapter,
+    edgeType: opts.edgeType,
+    label: opts.label,
+  });
+
+/** 编辑小节连线（label；伏笔可流转 status） */
+export const updateGroupEdge = (edgeId: number, label: string, status: number) =>
+  cmd<void>('update_group_edge', { edgeId, label, status });
+
+export const deleteGroupEdge = (edgeId: number) =>
+  cmd<void>('delete_group_edge', { edgeId });
+
+/** 保存小节连线手动弧度（拖弯落库） */
+export const setGroupEdgeBend = (edgeId: number, bend: number) =>
+  cmd<void>('set_group_edge_bend', { edgeId, bend });
+
+// ---------- 人物图谱（v0.9.13 可编辑人物层） ----------
+
+/** 保存 L1 全书人物图谱坐标（拖动落库，归一化） */
+export const moveCharacterNode = (characterId: number, mapX: number, mapY: number) =>
+  cmd<void>('move_character_node', { characterId, mapX, mapY });
+
+/** 保存 L2 卷内人物节点坐标（upsert） */
+export const setCharVolumePos = (characterId: number, volumeId: number, mapX: number, mapY: number) =>
+  cmd<void>('set_char_volume_pos', { characterId, volumeId, mapX, mapY });
+
+/** 手动绑定人物→卷 / 人物→章（重复绑定报「已绑定」） */
+export const createCharacterBinding = (opts: {
+  characterId: number;
+  volumeId: number | null;
+  chapterId: number | null;
+}) =>
+  cmd<CharacterBinding>('create_character_binding', {
+    characterId: opts.characterId,
+    volumeId: opts.volumeId,
+    chapterId: opts.chapterId,
+  });
+
+/** 解除绑定 */
+export const deleteCharacterBinding = (bindingId: number) =>
+  cmd<void>('delete_character_binding', { bindingId });
+
+/** 全部人物→卷绑定（L1 关联线） */
+export const listCharacterBindings = () =>
+  cmd<CharacterBinding[]>('list_character_bindings');
+
+/** L2 卷内人物画布坐标 */
+export const listCharVolumePos = (volumeId: number) =>
+  cmd<CharacterCanvasPos[]>('list_char_volume_pos', { volumeId });

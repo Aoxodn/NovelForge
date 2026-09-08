@@ -31,9 +31,14 @@ fn fetch_volume(conn: &Connection, id: i64) -> Result<Volume> {
     })
 }
 
-/// 新建卷（追加到末尾）
+/// 新建卷（追加到末尾）。可传入归一化画布坐标（右键空白处就地创建）。
 #[tauri::command]
-pub fn create_volume(state: State<'_, AppState>, title: String) -> Result<Volume> {
+pub fn create_volume(
+    state: State<'_, AppState>,
+    title: String,
+    map_x: Option<f64>,
+    map_y: Option<f64>,
+) -> Result<Volume> {
     let title = title.trim().to_string();
     if title.is_empty() {
         return Err(AppError::Msg("卷名不能为空".into()));
@@ -45,9 +50,11 @@ pub fn create_volume(state: State<'_, AppState>, title: String) -> Result<Volume
             [],
             |r| r.get(0),
         )?;
+        let mx = map_x.map(|v| v.clamp(-0.5, 1.5));
+        let my = map_y.map(|v| v.clamp(-0.5, 1.5));
         db.conn.execute(
-            "INSERT INTO volumes (title, sort_order) VALUES (?1, ?2)",
-            params![title, next],
+            "INSERT INTO volumes (title, sort_order, map_x, map_y) VALUES (?1, ?2, ?3, ?4)",
+            params![title, next, mx, my],
         )?;
         fetch_volume(&db.conn, db.conn.last_insert_rowid())
     })

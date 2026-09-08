@@ -10,10 +10,8 @@ import type { ChapterMeta, Volume } from '../types/models';
 import { ContextMenu } from './ContextMenu';
 import { PromptModal } from './Modal';
 import { ImportModal } from './ImportModal';
-import { OutlineModal } from './OutlineModal';
 import {
   IconChevron,
-  IconFormat,
   IconImport,
   IconMore,
   IconPlus,
@@ -50,8 +48,6 @@ export function ChapterTree() {
     | { kind: 'renameChapter'; chapter: ChapterMeta }
     | null
   >(null);
-  /** 正在编辑卷大纲的卷（弹窗） */
-  const [outlineVolume, setOutlineVolume] = useState<Volume | null>(null);
   /** 回收站弹窗 */
   const [showTrash, setShowTrash] = useState(false);
 
@@ -230,7 +226,6 @@ export function ChapterTree() {
     e.stopPropagation();
     ContextMenu.open(e.clientX, e.clientY, [
       { label: '新建章节', onClick: () => setPrompt({ kind: 'newChapter', volumeId: volume.id }) },
-      { label: '卷大纲…', onClick: () => setOutlineVolume(volume) },
       { separator: true, label: '' },
       { label: '重命名卷', onClick: () => setPrompt({ kind: 'renameVolume', volume }) },
       { label: '上移', onClick: () => moveVolume(volume, -1) },
@@ -259,26 +254,6 @@ export function ChapterTree() {
       await api.reverseVolumeChapters(volume.id);
       await refreshTree();
       showToast('章节已倒序');
-    } catch (e) {
-      showToast(String(e), 'error');
-    }
-  };
-
-  /** 全书排版：规范化所有章节文本，原文自动存版本快照 */
-  const formatAll = async () => {
-    const ok = window.confirm(
-      '全书排版将规范所有章节文本：\n\n· 去除段首 / 行尾空白（含全角缩进）\n· 删除空行\n\n每章修改前自动保存版本快照，可在版本历史恢复。继续？',
-    );
-    if (!ok) return;
-    try {
-      const n = await api.formatAllChapters();
-      await refreshTree();
-      const ed = useEditorStore.getState();
-      if (ed.chapterId !== null) {
-        if (ed.dirty) await ed.save(false);
-        await ed.loadChapter(ed.chapterId);
-      }
-      showToast(n > 0 ? `已排版 ${n} 章（原文本已存快照）` : '所有章节都已符合规范');
     } catch (e) {
       showToast(String(e), 'error');
     }
@@ -363,7 +338,6 @@ export function ChapterTree() {
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               ContextMenu.open(r.left - 100, r.bottom + 4, [
-                { label: '全书排版', icon: <IconFormat />, onClick: () => void formatAll() },
                 { label: '回收站', icon: <IconTrash />, onClick: () => setShowTrash(true) },
               ]);
             }}
@@ -418,16 +392,7 @@ export function ChapterTree() {
                       onClick={() => onChapterClick(ch.id)}
                       onContextMenu={(e) => chapterMenu(e, ch, chapters)}
                     >
-                      {ch.nodeType !== 0 ? (
-                        <span
-                          className="chapter-node-mark"
-                          title={`${['', '事件', '转折', '支线', '结局'][ch.nodeType]}规划节点（空章节，不参与导出）`}
-                        >
-                          ◇
-                        </span>
-                      ) : (
-                        <span className="chapter-status-dot" data-status={ch.status} />
-                      )}
+                      <span className="chapter-status-dot" data-status={ch.status} />
                       <span className="chapter-title" title={ch.title}>
                         {ch.title}
                       </span>
@@ -486,24 +451,6 @@ export function ChapterTree() {
 
       {showTrash && (
         <TrashModal onClose={() => setShowTrash(false)} onChanged={refreshTree} />
-      )}
-
-      {outlineVolume && (
-        <OutlineModal
-          title={`卷大纲 · ${outlineVolume.title}`}
-          hint="本卷主线 / 目标 / 剧情走向"
-          initial={outlineVolume.summary}
-          onClose={() => setOutlineVolume(null)}
-          onSave={async (text) => {
-            try {
-              await api.setVolumeSummary(outlineVolume.id, text);
-              await refreshTree();
-              showToast('卷大纲已保存');
-            } catch (e) {
-              showToast(String(e), 'error');
-            }
-          }}
-        />
       )}
     </aside>
   );

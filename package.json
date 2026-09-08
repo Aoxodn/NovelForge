@@ -1,13 +1,14 @@
 {
   "name": "novelforge",
   "private": true,
-  "version": "0.8.0",
+  "version": "1.0.1-beta.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "release": "tauri build && node scripts/copy-installer.mjs",
     "dist": "node scripts/release.mjs"
   },
   "dependencies": {

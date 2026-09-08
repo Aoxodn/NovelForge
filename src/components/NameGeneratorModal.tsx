@@ -7,7 +7,7 @@ import * as api from '../api';
 import { useAppStore } from '../store/appStore';
 import { Modal } from './Modal';
 import { IconCopy, IconRefresh } from './icons';
-import type { NameKind, NameParams } from '../types/models';
+import type { NameGenre, NameKind, NameParams } from '../types/models';
 
 const TABS: { key: NameKind; label: string }[] = [
   { key: 'person', label: '人名' },
@@ -60,12 +60,23 @@ export function NameGeneratorModal({ onClose }: { onClose: () => void }) {
   const [names, setNames] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
+  // 题材（组合类）：后端拉取清单，未建设题材置灰
+  const [genres, setGenres] = useState<NameGenre[]>([]);
+  const [genre, setGenre] = useState('xuanhuan');
+
   // 人名筛选
   const [gender, setGender] = useState<Gender>('any');
   const [country, setCountry] = useState<Country>('cn');
   const [surnameType, setSurnameType] = useState<SurnameType>('any');
   const [surname, setSurname] = useState('');
   const [given, setGiven] = useState('');
+
+  useEffect(() => {
+    api
+      .listNameGenres()
+      .then(setGenres)
+      .catch(() => setGenres([]));
+  }, []);
 
   const roll = useCallback(
     async (k: NameKind, useInputs: boolean) => {
@@ -80,7 +91,7 @@ export function NameGeneratorModal({ onClose }: { onClose: () => void }) {
                 surname: useInputs && surname ? surname.trim() : undefined,
                 given: useInputs && given ? given.trim() : undefined,
               }
-            : undefined;
+            : { genre };
         setNames(await api.generateNames(k, 15, params));
       } catch (e) {
         showToast(String(e), 'error');
@@ -88,14 +99,14 @@ export function NameGeneratorModal({ onClose }: { onClose: () => void }) {
         setBusy(false);
       }
     },
-    [gender, country, surnameType, surname, given, showToast],
+    [genre, gender, country, surnameType, surname, given, showToast],
   );
 
-  // 切换类目 / 点筛选时立即重掷；输入框内容变化不自动掷（点「生成」）
+  // 切换类目 / 题材 / 点筛选时立即重掷；输入框内容变化不自动掷（点「生成」）
   useEffect(() => {
     void roll(kind, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, gender, country, surnameType]);
+  }, [kind, genre, gender, country, surnameType]);
 
   const copy = async (name: string) => {
     try {
@@ -183,15 +194,33 @@ export function NameGeneratorModal({ onClose }: { onClose: () => void }) {
               </button>
             </>
           ) : (
-            <p className="namegen-hint">
-              {kind === 'place' && '山川城镇、秘境关卡，随机组合地名。'}
-              {kind === 'sect' && '宗门教派、山庄书院，随机组合势力名。'}
-              {kind === 'technique' && '功法武学、心法神通，随机组合。'}
-              {kind === 'item' && '神兵利器、法宝奇物，随机组合。'}
-              {kind === 'pill' && '灵丹妙药，随机组合。'}
-              {kind === 'beast' && '妖兽灵禽，随机组合。'}
-              {kind === 'plant' && '灵草仙株，随机组合。'}
-            </p>
+            <>
+              <div className="filter-group">
+                <span className="filter-label">题材</span>
+                <select
+                  className="select"
+                  value={genre}
+                  onChange={(e) => setGenre(e.target.value)}
+                >
+                  {genres.map((g) => (
+                    <option key={g.key} value={g.key} disabled={!g.ready}>
+                      {g.core ? '★' : '☆'}
+                      {g.label}
+                      {g.ready ? '' : '（词典建设中）'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="namegen-hint">
+                {kind === 'place' && '山川城镇、秘境关卡，按题材审美随机组合地名。'}
+                {kind === 'sect' && '宗门教派、山庄书院，按题材审美随机组合势力名。'}
+                {kind === 'technique' && '功法武学、心法神通，按题材审美随机组合。'}
+                {kind === 'item' && '神兵利器、法宝奇物，按题材审美随机组合。'}
+                {kind === 'pill' && '灵丹妙药，按题材审美随机组合。'}
+                {kind === 'beast' && '妖兽灵禽，按题材审美随机组合。'}
+                {kind === 'plant' && '灵草仙株，按题材审美随机组合。'}
+              </p>
+            </>
           )}
         </div>
 

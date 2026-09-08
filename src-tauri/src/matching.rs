@@ -32,6 +32,35 @@ pub fn count_occurrences(content: &str, patterns: &[String]) -> usize {
     re.find_iter(content).count()
 }
 
+/// 先从正文中剔除误判词，再统计 patterns 的不重叠出现次数。
+///
+/// 用于单字人名：人物叫「简」时，正文里的「简单」「简历」会被误识为人名提及。
+/// 先把这些误判词替换为等长空格（不改变其他字符位置），再数「简」的次数。
+/// 多字名（≥2字）无需调用此函数，精确匹配已零误判。
+///
+/// exclude_words 为空时退化为普通 [`count_occurrences`]。
+pub fn count_occurrences_with_exclusions(
+    content: &str,
+    patterns: &[String],
+    exclude_words: &[String],
+) -> usize {
+    if exclude_words.is_empty() {
+        return count_occurrences(content, patterns);
+    }
+    // 等长替换：保持字符位置不变，避免影响其他匹配
+    let mut cleaned: String = content.to_string();
+    for w in exclude_words {
+        let w = w.trim();
+        if w.is_empty() {
+            continue;
+        }
+        // 按字符数生成等长空格（中文等宽）
+        let pad: String = w.chars().map(|_| ' ').collect();
+        cleaned = cleaned.replace(w, &pad);
+    }
+    count_occurrences(&cleaned, patterns)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +107,31 @@ mod tests {
         let c = "他练成了 C++ 心法，又读了《史记.列传》。"
             ;
         assert_eq!(count_occurrences(c, &pats(&["C++", "史记.列传"])), 2);
+    }
+
+    #[test]
+    fn single_char_name_excludes_false_positives() {
+        // 人物叫「简」，正文里「简单」「简历」不应算人名提及
+        let c = "简走进房间。这道题很简单。简看了看简历。简笑了。";
+        assert_eq!(
+            count_occurrences_with_exclusions(c, &pats(&["简"]), &pats(&["简单", "简历"])),
+            3 // 简走进 / 简看了 / 简笑了
+        );
+    }
+
+    #[test]
+    fn empty_exclusions_falls_back_to_normal() {
+        let c = "林默来了。林默走了。";
+        assert_eq!(count_occurrences_with_exclusions(c, &pats(&["林默"]), &[]), 2);
+    }
+
+    #[test]
+    fn exclusion_preserves_other_names() {
+        // 排除「简单」不应影响「林默」的计数
+        let c = "简单来说，林默和简一起走了。";
+        assert_eq!(
+            count_occurrences_with_exclusions(c, &pats(&["简", "林默"]), &pats(&["简单"])),
+            2 // 林默 + 简（一起走了的简）
+        );
     }
 }

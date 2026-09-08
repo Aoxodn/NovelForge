@@ -38,8 +38,6 @@ pub struct ChapterMeta {
     pub word_count: i64,
     pub sort_order: i32,
     pub status: i32,
-    /// 0=正文 1=事件 2=转折 3=支线 4=结局（V6：规划节点标注，0 = 普通章节）
-    pub node_type: i32,
     pub updated_at: String,
 }
 
@@ -227,6 +225,11 @@ pub struct CharacterProfile {
     pub first_chapter_title: Option<String>,
     pub last_chapter_id: Option<i64>,
     pub last_chapter_title: Option<String>,
+    /// L1 全书人物图谱坐标（NULL = 自动布局在轨迹带上）
+    pub map_x: Option<f64>,
+    pub map_y: Option<f64>,
+    /// 单字人名误判排除词（如「简」→「简单/简历/简介…」），多字名为空
+    pub exclude_words: Vec<String>,
 }
 
 /// 人物出现热度（文档三十一节）：按全书章节顺序的出现次数序列
@@ -304,7 +307,7 @@ pub struct WritingStats {
     pub chapter_count: i64,
 }
 
-// ========== 故事地图 / 可视化写小说（V6） ==========
+// ========== 故事地图 / 可视化写小说（V7：节点 = 卷 / 故事阶段，设计文档 V1.1） ==========
 
 /// 剧情线（主线 / 支线 / 暗线）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,34 +317,36 @@ pub struct StoryArc {
     pub title: String,
     /// 0=主线 1=支线 2=暗线
     pub kind: i32,
-    /// 泳道 / 节点着色（空 = 前端按 id 取调色板）
+    /// 泳道 / 连线着色（空 = 前端按 id 取调色板）
     pub color: String,
     pub summary: String,
 }
 
-/// 故事图节点 = 章节元数据 + 画布坐标 + 节点类型 + 弧线归属
+/// 故事图节点 = 卷（故事阶段）：卷名 / 阶段序号 / 章节统计 / 细纲 / 画布坐标
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryNode {
+    /// 卷 id
     pub id: i64,
-    pub volume_id: i64,
-    pub volume_title: String,
     pub title: String,
+    /// 阶段序号（= volumes.sort_order，0 起）
+    pub sort_order: i64,
+    /// 卷细纲（volumes.summary）
     pub summary: String,
+    /// 本卷章节数（不含回收站）
+    pub chapter_count: i64,
+    /// 已完稿章数（完成度 = done / total，派生展示不落库）
+    pub done_chapters: i64,
     pub word_count: i64,
-    /// 0=草稿 1=完稿
-    pub status: i32,
-    /// 0=章节 1=事件 2=转折 3=支线 4=结局
+    /// 0=常规 1=支线卷 2=番外（预留）
     pub node_type: i32,
     /// 画布坐标，归一化 0..1；NULL = 未排布（自动布局可覆盖）
     pub map_x: Option<f64>,
     pub map_y: Option<f64>,
-    pub arc_id: Option<i64>,
-    /// 全局章节序（0 起，按 卷序+章序 排列；一切跨章计算统一口径）
-    pub global_order: i64,
 }
 
-/// 连线（0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收）
+/// 连线（0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收）。
+/// from/to 指向卷；伏笔边可带章级锚点（NULL = 卷级伏笔）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryEdge {
@@ -350,10 +355,16 @@ pub struct StoryEdge {
     pub to_node: i64,
     pub edge_type: i32,
     pub arc_id: Option<i64>,
+    /// 伏笔埋设章（仅 edge_type=4；NULL = 卷级）
+    pub from_chapter_id: Option<i64>,
+    /// 伏笔回收章（仅 edge_type=4；NULL = 卷级）
+    pub to_chapter_id: Option<i64>,
     /// 因果说明 / 伏笔内容
     pub label: String,
     /// 伏笔：0=活跃 1=已回收 2=失效；其余类型固定 0
     pub status: i32,
+    /// 手动弧度：相对类型泳道基准的垂直偏移（世界像素，拖弯落库）
+    pub bend: f64,
 }
 
 /// 故事图全量（打开地图 / 总览时一次拉取）
@@ -373,31 +384,113 @@ pub struct ForeshadowView {
     pub label: String,
     /// 0=活跃 1=已回收 2=失效
     pub status: i32,
+    /// 埋设卷 id
     pub from_node: i64,
-    pub from_title: String,
+    /// 埋设位置描述：「第2卷」或「第2卷·第15章 玉佩现世」
+    pub from_desc: String,
     pub to_node: i64,
-    pub to_title: String,
-    /// 跨度 = 全局章节序差（回收端 − 埋设端，>= 0）
+    /// 回收位置描述
+    pub to_desc: String,
+    /// 章级锚点（跳转正文用；卷级为 NULL）
+    pub from_chapter_id: Option<i64>,
+    pub to_chapter_id: Option<i64>,
+    /// 跨度（章序差；卷级伏笔按「埋卷末章 → 收卷首章」保守估算）
     pub span: i64,
     /// 跨度超过阈值（settings 表，默认 10 章）
     pub overdue: bool,
     pub arc_id: Option<i64>,
-    /// 任一端章节在回收站（软删除，图中隐藏但边保留）
+    /// 章级锚点在回收站（软删除）
     pub from_trashed: bool,
     pub to_trashed: bool,
 }
 
-/// 相邻节点（章节发展图的上 / 下游项）
+/// 卷内章节卡片（卷内视图 / 章节发展图）
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StoryNeighbor {
+pub struct VolumeChapterBrief {
+    pub id: i64,
+    pub title: String,
+    /// 0=草稿 1=完稿
+    pub status: i32,
+    pub word_count: i64,
+    pub summary: String,
+    pub notes: String,
+    pub sort_order: i32,
+    /// 全局章节序（0 起，卷序+章序）
+    pub global_order: i64,
+    /// 所属小节（章节群；NULL = 未分组）
+    pub group_id: Option<i64>,
+    /// L2 画布坐标（归一化 0..1；NULL = 未排布，由布局算法派生）
+    pub map_x: Option<f64>,
+    pub map_y: Option<f64>,
+}
+
+/// 小节（章节群）：同卷若干章节的分组，画布上渲染为组框
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterGroup {
+    pub id: i64,
+    pub volume_id: i64,
+    pub title: String,
+    pub sort_order: i32,
+}
+
+/// 小节连线（组框拖出：小节→小节 / 小节→章节，目标二选一）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupEdge {
+    pub id: i64,
+    pub volume_id: i64,
+    pub from_group: i64,
+    pub to_group: Option<i64>,
+    pub to_chapter: Option<i64>,
+    pub edge_type: i32,
+    pub label: String,
+    /// 伏笔：0=活跃 1=已回收 2=失效
+    pub status: i32,
+    pub bend: f64,
+}
+
+/// 章间连线（L2 卷内画布，0顺序..6闪回与卷级边同枚举）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterEdge {
+    pub id: i64,
+    pub from_chapter: i64,
+    pub to_chapter: i64,
+    pub edge_type: i32,
+    pub label: String,
+    /// 伏笔：0=活跃 1=已回收 2=失效；其余固定 0
+    pub status: i32,
+    /// 手动弧度（世界像素）
+    pub bend: f64,
+}
+
+/// 卷内视图（L2）：卷节点 + 本卷章节 + 小节 + 章间连线 + 小节连线
+/// + 人物画布坐标 / 人物绑定（可编辑人物层）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeDetail {
+    pub node: StoryNode,
+    pub chapters: Vec<VolumeChapterBrief>,
+    pub groups: Vec<ChapterGroup>,
+    pub chapter_edges: Vec<ChapterEdge>,
+    pub group_edges: Vec<GroupEdge>,
+    pub char_positions: Vec<CharacterCanvasPos>,
+    pub bindings: Vec<CharacterBinding>,
+}
+
+/// 卷级相邻（章节发展图：本章所属卷的上 / 下游卷）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeEdgeBrief {
     pub edge_id: i64,
     pub edge_type: i32,
     pub label: String,
-    pub node: StoryNode,
+    pub volume: StoryNode,
 }
 
-/// 本章伏笔（发展图卡片用）
+/// 本章相关伏笔（章节发展图卡片用）
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForeshadowBrief {
@@ -405,25 +498,118 @@ pub struct ForeshadowBrief {
     pub label: String,
     /// 0=活跃 1=已回收 2=失效
     pub status: i32,
-    /// 对端章节（埋设视角 = 回收章；回收视角 = 埋设章）
-    pub other_node: StoryNode,
-    /// 跨度（全局章节序差，>= 0）
+    /// 对端位置描述（埋设视角 = 回收位置；回收视角 = 埋设位置）
+    pub other_desc: String,
+    /// 对端章级锚点（NULL = 卷级，跳地图）
+    pub other_chapter_id: Option<i64>,
+    /// 对端卷 id（跳地图定位用）
+    pub other_volume_id: i64,
+    /// 跨度（章序差，>= 0）
     pub span: i64,
     pub overdue: bool,
-    /// 本章埋设的伏笔：回收端已完稿且仍活跃 → 前端出「标记已回收」轻提示
+    /// 本章埋设 + 回收端已完稿 + 仍活跃 → 前端出「标记已回收」轻提示
     pub can_resolve: bool,
 }
 
-/// 单章故事上下文（右栏「本章发展」卡）
+/// 单章故事上下文（右栏「本章发展」卡，设计文档 §3.5）
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterStoryContext {
     pub chapter_id: i64,
-    pub arc: Option<StoryArc>,
-    pub upstream: Vec<StoryNeighbor>,
-    pub downstream: Vec<StoryNeighbor>,
-    /// 本章埋设的伏笔
+    /// 本章所属卷（卷节点，含细纲）
+    pub volume: StoryNode,
+    /// 所属卷的入边（上游卷）
+    pub volume_in_edges: Vec<VolumeEdgeBrief>,
+    /// 所属卷的出边（下游卷）
+    pub volume_out_edges: Vec<VolumeEdgeBrief>,
+    /// 卷内前章（各 ≤4，按卷内顺序）
+    pub prev_chapters: Vec<VolumeChapterBrief>,
+    /// 卷内后章（各 ≤4）
+    pub next_chapters: Vec<VolumeChapterBrief>,
+    /// 本章埋设的伏笔（章级锚点 = 本章）
     pub planted: Vec<ForeshadowBrief>,
     /// 本章回收的伏笔
     pub resolved: Vec<ForeshadowBrief>,
+    /// 所属卷的卷级伏笔（活跃 / 已回收，两端卷锚点至少一端为本卷）
+    pub volume_foreshadows: Vec<ForeshadowBrief>,
+}
+
+/// 命名题材元信息（前端题材下拉：未建设题材置灰）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NameGenre {
+    pub key: String,
+    pub label: String,
+    /// 核心题材（词量翻倍）
+    pub core: bool,
+    /// 词典是否已建设（false = 前端置灰，不可选）
+    pub ready: bool,
+}
+
+/// 人物关系（v0.9.13 广义人物关系体系，character_relations 表）。
+/// 五大类定色定线型，rel_type 自由文本定标签，direction 定箭头。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterRelation {
+    pub id: i64,
+    pub from_char: i64,
+    pub to_char: i64,
+    /// 1血缘 2情感 3社会 4阵营 5叙事
+    pub rel_category: i32,
+    /// 子类型名（自由文本，如「母女」「师徒」）
+    pub rel_type: String,
+    /// 自定义补充说明
+    pub label: String,
+    /// 0双向 1单向(from→to)
+    pub direction: i32,
+    /// NULL = 跨卷关系（L1 / 所有 L2 显示）；具体卷 = 仅该卷 L2 显示
+    pub volume_id: Option<i64>,
+    pub created_at: String,
+}
+
+/// 人物 × 卷出场统计（画布人物层数据源：character_mentions 按卷聚合）。
+/// 纯渲染派生数据，不落库。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterVolumePresence {
+    pub character_id: i64,
+    pub name: String,
+    pub role: String,
+    pub volume_id: i64,
+    pub mention_count: i64,
+}
+
+/// 人物手动绑定（人物→卷 / 人物→章，二选一）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterBinding {
+    pub id: i64,
+    pub character_id: i64,
+    pub volume_id: Option<i64>,
+    pub chapter_id: Option<i64>,
+}
+
+/// L2 卷内人物画布坐标
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterCanvasPos {
+    pub character_id: i64,
+    pub map_x: f64,
+    pub map_y: f64,
+}
+
+/// 人物图谱节点（L1：全部已建卡人物 + 图谱坐标 + 是否上图谱）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterGraphNode {
+    pub id: i64,
+    pub name: String,
+    pub role: String,
+    /// 总提及（0 = 正文未出现，纯图谱节点）
+    pub total_mentions: i64,
+    /// 出场卷数（跨卷人物才画轨迹带）
+    pub volume_count: i64,
+    /// 图谱坐标（NULL = 未上图谱 / 自动布局）
+    pub map_x: Option<f64>,
+    pub map_y: Option<f64>,
 }

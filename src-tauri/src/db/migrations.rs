@@ -230,6 +230,205 @@ const MIGRATIONS: &[(i64, &str)] = &[(
     CREATE INDEX IF NOT EXISTS idx_edges_to   ON story_edges(to_node);
     CREATE INDEX IF NOT EXISTS idx_edges_arc  ON story_edges(arc_id);
     ",
+),
+(
+    7,
+    // V7：可视化模块 V1.1 修订——节点模型从「章节」切换为「卷 / 故事阶段」。
+    //   ① volumes 成为画布节点：加归一化坐标与节点类型；
+    //   ② story_edges 重建为卷级引用，伏笔边额外带可空章级锚点
+    //      （旧 V6 章节边按 chapters.volume_id 转换；伏笔边保留原章为锚点；
+    //        同卷非伏笔边丢弃，同卷伏笔边保留——CHECK 放行 edge_type=4 自环）；
+    //   ③ V1.0 章节级画布字段废弃（坐标 / 弧线归属 / 规划节点类型）。
+    "
+    -- ① 卷扩展：画布坐标（归一化 0..1）+ 节点类型（0=常规 1=支线卷 2=番外，预留）
+    ALTER TABLE volumes ADD COLUMN map_x REAL;
+    ALTER TABLE volumes ADD COLUMN map_y REAL;
+    ALTER TABLE volumes ADD COLUMN node_type INTEGER NOT NULL DEFAULT 0;
+
+    -- ② 连线重建：from/to 指向卷；伏笔可锚定到具体章节（NULL = 卷级）
+    CREATE TABLE IF NOT EXISTS story_edges_v7 (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_node        INTEGER NOT NULL REFERENCES volumes(id) ON DELETE CASCADE,
+        to_node          INTEGER NOT NULL REFERENCES volumes(id) ON DELETE CASCADE,
+        edge_type        INTEGER NOT NULL,       -- 0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收
+        arc_id           INTEGER REFERENCES story_arcs(id) ON DELETE SET NULL,
+        from_chapter_id  INTEGER REFERENCES chapters(id) ON DELETE SET NULL,  -- 伏笔埋设章（可空=卷级）
+        to_chapter_id    INTEGER REFERENCES chapters(id) ON DELETE SET NULL,  -- 伏笔回收章（可空=卷级）
+        label            TEXT NOT NULL DEFAULT '',
+        status           INTEGER NOT NULL DEFAULT 0, -- 伏笔：0=活跃 1=已回收 2=失效
+        sort_order       INTEGER NOT NULL DEFAULT 0,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        CHECK (from_node != to_node OR edge_type = 4)
+    );
+    -- 数据转换：章节边 → 卷边；伏笔边（type=4）把原章节 id 存入章级锚点；
+    -- 同卷的普通边（顺序/因果/分支/汇合）在卷粒度下无意义，直接丢弃
+    INSERT INTO story_edges_v7 (from_node, to_node, edge_type, arc_id,
+                                from_chapter_id, to_chapter_id, label, status,
+                                sort_order, created_at, updated_at)
+    SELECT cf.volume_id, ct.volume_id, e.edge_type, e.arc_id,
+           CASE WHEN e.edge_type = 4 THEN e.from_node ELSE NULL END,
+           CASE WHEN e.edge_type = 4 THEN e.to_node   ELSE NULL END,
+           e.label, e.status, e.sort_order, e.created_at, e.updated_at
+    FROM story_edges e
+    JOIN chapters cf ON cf.id = e.from_node
+    JOIN chapters ct ON ct.id = e.to_node
+    WHERE e.edge_type = 4 OR cf.volume_id != ct.volume_id;
+    DROP TABLE story_edges;
+    ALTER TABLE story_edges_v7 RENAME TO story_edges;
+    CREATE INDEX IF NOT EXISTS idx_edges_from ON story_edges(from_node);
+    CREATE INDEX IF NOT EXISTS idx_edges_to   ON story_edges(to_node);
+    CREATE INDEX IF NOT EXISTS idx_edges_arc  ON story_edges(arc_id);
+
+    -- ③ V1.0 章节级数据清理：空规划节点（无正文且无纲要）删除；
+    --    带纲要的保留为普通章节；坐标 / 弧线归属列废弃
+    DELETE FROM chapters WHERE node_type != 0 AND content = '' AND summary = '' AND notes = '';
+    UPDATE chapters SET node_type = 0 WHERE node_type != 0;
+    DROP INDEX IF EXISTS idx_chapters_arc;
+    ALTER TABLE chapters DROP COLUMN map_x;
+    ALTER TABLE chapters DROP COLUMN map_y;
+    ALTER TABLE chapters DROP COLUMN arc_id;
+    ALTER TABLE chapters DROP COLUMN node_type;
+",
+),
+(
+    8,
+    // V8：广义人物关系体系（v0.9.13）。
+    //   五大类（1血缘 2情感 3社会 4阵营 5叙事）+ 自由文本子类型；
+    //   volume_id = NULL 表示跨卷关系（L1 / 所有 L2 显示），
+    //   volume_id = 具体卷时仅该卷 L2 显示。人物删除时关系级联清理。
+    //   卷删除时 volume_id 置 NULL（关系退化为跨卷关系而非消失）。
+    //   另：story_edges.edge_type 新增 5=平行叙事 6=闪回/插叙（纯枚举扩展，
+    //   无结构变更，现有 CHECK 只约束自环）。
+    "
+    CREATE TABLE IF NOT EXISTS character_relations (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_char    INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        to_char      INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        rel_category INTEGER NOT NULL,           -- 1血缘 2情感 3社会 4阵营 5叙事
+        rel_type     TEXT NOT NULL DEFAULT '',   -- 子类型名，如「母女」「师徒」
+        label        TEXT NOT NULL DEFAULT '',   -- 自定义补充说明
+        direction    INTEGER NOT NULL DEFAULT 0, -- 0双向 1单向(from→to)
+        volume_id    INTEGER REFERENCES volumes(id) ON DELETE SET NULL,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_rel_from   ON character_relations(from_char);
+    CREATE INDEX IF NOT EXISTS idx_rel_to     ON character_relations(to_char);
+    CREATE INDEX IF NOT EXISTS idx_rel_volume ON character_relations(volume_id);
+    ",
+),
+(
+    9,
+    // V9：连线手动弧度（v0.9.13 画布交互补充）。
+    // bend = 相对「类型泳道」基准位置的垂直偏移（世界像素，有符号），
+    // 用户在画布上拖动连线中点调节，0 = 纯类型泳道弧度。
+    "
+    ALTER TABLE story_edges ADD COLUMN bend REAL NOT NULL DEFAULT 0;
+    ",
+),
+(
+    10,
+    // V10：L2 卷内画布可编辑化——章节节点坐标 / 小节（章节群）/ 章间连线。
+    //   ① chapters.map_x / map_y：L2 画布章节坐标（归一化 0..1，V7 曾废弃
+    //      章节级坐标，本次卷内画布升级为可编辑后重新启用并落库）；
+    //   ② chapter_groups：小节 = 同卷若干章节的分组（组框渲染、整体拖动）；
+    //   ③ chapter_edges：章间连线（0顺序..6闪回 与卷级边同枚举），
+    //      仅限同卷章节；bend 手动弧度与卷级边同口径。
+    "
+    ALTER TABLE chapters ADD COLUMN map_x REAL;
+    ALTER TABLE chapters ADD COLUMN map_y REAL;
+
+    CREATE TABLE IF NOT EXISTS chapter_groups (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        volume_id  INTEGER NOT NULL REFERENCES volumes(id) ON DELETE CASCADE,
+        title      TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_chgroups_volume ON chapter_groups(volume_id);
+    ALTER TABLE chapters ADD COLUMN group_id INTEGER REFERENCES chapter_groups(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_chapters_group ON chapters(group_id);
+
+    CREATE TABLE IF NOT EXISTS chapter_edges (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_chapter INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        to_chapter   INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        edge_type    INTEGER NOT NULL,           -- 0顺序..6闪回（与 story_edges 同枚举）
+        label        TEXT NOT NULL DEFAULT '',   -- 因果说明 / 伏笔内容
+        status       INTEGER NOT NULL DEFAULT 0, -- 伏笔：0活跃 1已回收 2失效
+        bend         REAL NOT NULL DEFAULT 0,    -- 手动弧度（世界像素）
+        created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        CHECK (from_chapter != to_chapter)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cedges_from ON chapter_edges(from_chapter);
+    CREATE INDEX IF NOT EXISTS idx_cedges_to   ON chapter_edges(to_chapter);
+    ",
+),
+(
+    11,
+    // V11：小节连线（组框圆点拖出）。from_group 指向源小节；
+    // 目标二选一：to_group（小节→小节）或 to_chapter（小节→章节）。
+    // 小节删除时连线随 FK CASCADE 清理。
+    "
+    CREATE TABLE IF NOT EXISTS group_edges (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        volume_id  INTEGER NOT NULL REFERENCES volumes(id) ON DELETE CASCADE,
+        from_group INTEGER NOT NULL REFERENCES chapter_groups(id) ON DELETE CASCADE,
+        to_group   INTEGER REFERENCES chapter_groups(id) ON DELETE CASCADE,
+        to_chapter INTEGER REFERENCES chapters(id) ON DELETE CASCADE,
+        edge_type  INTEGER NOT NULL,           -- 0顺序..6闪回（与章间边同枚举）
+        label      TEXT NOT NULL DEFAULT '',
+        status     INTEGER NOT NULL DEFAULT 0, -- 伏笔：0活跃 1已回收 2失效
+        bend       REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        CHECK ((to_group IS NULL) != (to_chapter IS NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_gedges_volume ON group_edges(volume_id);
+    CREATE INDEX IF NOT EXISTS idx_gedges_from   ON group_edges(from_group);
+    CREATE INDEX IF NOT EXISTS idx_gedges_to     ON group_edges(to_group);
+    ",
+),
+(
+    12,
+    // V12：人物层可编辑化——主动人物图谱。
+    //   ① characters.map_x / map_y：L1 全书人物图谱坐标（手动拖动落库；
+    //      NULL = 自动布局在出场轨迹带上）；
+    //   ② char_volume_pos：L2 卷内人物节点坐标（每卷独立，提及堆叠兜底）；
+    //   ③ character_bindings：手动绑定人物→卷 / 人物→章（正文没提及也能挂，
+    //      二选一；目标删除时绑定级联清理）。
+    "
+    ALTER TABLE characters ADD COLUMN map_x REAL;
+    ALTER TABLE characters ADD COLUMN map_y REAL;
+
+    CREATE TABLE IF NOT EXISTS char_volume_pos (
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        volume_id    INTEGER NOT NULL REFERENCES volumes(id) ON DELETE CASCADE,
+        map_x        REAL NOT NULL,
+        map_y        REAL NOT NULL,
+        PRIMARY KEY (character_id, volume_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS character_bindings (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        volume_id    INTEGER REFERENCES volumes(id) ON DELETE CASCADE,
+        chapter_id   INTEGER REFERENCES chapters(id) ON DELETE CASCADE,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        CHECK ((volume_id IS NULL) != (chapter_id IS NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_charbind_char   ON character_bindings(character_id);
+    CREATE INDEX IF NOT EXISTS idx_charbind_volume ON character_bindings(volume_id);
+    CREATE INDEX IF NOT EXISTS idx_charbind_chapter ON character_bindings(chapter_id);
+    ",
+),
+(
+    13,
+    // V13：单字人名误判词排除。
+    //   characters.exclude_words：JSON 数组，存该人物的误判词。
+    //   提及统计时先从正文剔除这些词，再数名字出现次数。
+    "
+    ALTER TABLE characters ADD COLUMN exclude_words TEXT NOT NULL DEFAULT '[]';
+    ",
 )];
 
 /// 应用所有未执行的迁移

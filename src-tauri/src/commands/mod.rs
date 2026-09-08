@@ -10,12 +10,15 @@
 //! `tauri::async_runtime::spawn_blocking` 在后台线程执行，避免阻塞 UI。
 
 pub mod backup;
+pub mod canvas_chars;
 pub mod cards;
+pub mod chapter_canvas;
 pub mod chapter;
 pub mod export;
 pub mod import;
 pub mod names;
 pub mod project;
+pub mod relations;
 pub mod search;
 pub mod stats;
 pub mod story_graph;

@@ -199,12 +199,6 @@ export const IconSortReverse = ({ size = 14 }: P) => (
   </svg>
 );
 
-export const IconFormat = ({ size = 14 }: P) => (
-  <svg {...base(size)}>
-    <path d="M4 6h16M4 12h10M4 18h13" />
-  </svg>
-);
-
 export const IconTrashRestore = ({ size = 14 }: P) => (
   <svg {...base(size)}>
     <path d="M3 12a9 9 0 1 0 2.64-6.36" />

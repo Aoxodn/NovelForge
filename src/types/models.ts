@@ -30,8 +30,6 @@ export interface ChapterMeta {
   sortOrder: number;
   /** 0=草稿 1=完稿 */
   status: number;
-  /** 0=正文 1=事件 2=转折 3=支线 4=结局（V6：规划节点标注） */
-  nodeType: number;
   updatedAt: string;
 }
 
@@ -163,6 +161,11 @@ export interface CharacterProfile {
   firstChapterTitle: string | null;
   lastChapterId: number | null;
   lastChapterTitle: string | null;
+  /** L1 全书人物图谱坐标（null = 自动布局在轨迹带上） */
+  mapX: number | null;
+  mapY: number | null;
+  /** 单字人名误判排除词（如「简」→「简单/简历/简介…」），多字名为空 */
+  excludeWords: string[];
 }
 
 /** 人物出现热度：perChapter 与全书章节顺序对齐 */
@@ -229,13 +232,24 @@ export type NameKind =
   | 'beast'
   | 'plant';
 
-/** 人名筛选参数 */
+/** 取名筛选参数（genre 仅组合类使用；其余仅人名） */
 export interface NameParams {
+  genre?: string;
   gender?: 'male' | 'female' | 'any';
   country?: 'cn' | 'jp' | 'west';
   surnameType?: 'single' | 'compound' | 'any';
   surname?: string;
   given?: string;
+}
+
+/** 命名题材元信息（后端 list_name_genres 返回） */
+export interface NameGenre {
+  key: string;
+  label: string;
+  /** 核心题材（词量翻倍） */
+  core: boolean;
+  /** 词典是否已建设（false = 置灰不可选） */
+  ready: boolean;
 }
 
 /** 回收站章节条目 */
@@ -248,10 +262,7 @@ export interface DeletedChapter {
   deletedAt: string;
 }
 
-// ========== 故事地图 / 可视化写小说（V6） ==========
-
-/** 节点类型：0=正文 1=事件 2=转折 3=支线 4=结局 */
-export type StoryNodeType = 0 | 1 | 2 | 3 | 4;
+// ========== 故事地图 / 可视化写小说（V7：节点 = 卷 / 故事阶段） ==========
 
 /** 连线类型：0=顺序 1=因果 2=分支 3=汇合 4=伏笔回收 */
 export type StoryEdgeType = 0 | 1 | 2 | 3 | 4;
@@ -269,35 +280,43 @@ export interface StoryArc {
   summary: string;
 }
 
-/** 故事图节点 = 章节元数据 + 画布坐标 + 节点类型 + 弧线归属 */
+/** 故事图节点 = 卷（故事阶段）：卷名 / 阶段序号 / 章节统计 / 细纲 / 画布坐标 */
 export interface StoryNode {
+  /** 卷 id */
   id: number;
-  volumeId: number;
-  volumeTitle: string;
   title: string;
+  /** 阶段序号（= 卷 sortOrder，0 起） */
+  sortOrder: number;
+  /** 卷细纲 */
   summary: string;
+  chapterCount: number;
+  /** 已完稿章数（完成度 = done / total） */
+  doneChapters: number;
   wordCount: number;
-  status: number;
+  /** 0=常规 1=支线卷 2=番外（预留） */
   nodeType: number;
   /** 画布坐标，归一化 0..1；null = 未排布 */
   mapX: number | null;
   mapY: number | null;
-  arcId: number | null;
-  /** 全局章节序（0 起，卷序+章序；跨章计算统一口径） */
-  globalOrder: number;
 }
 
-/** 连线 */
+/** 连线（两端 = 卷；伏笔可带章级锚点） */
 export interface StoryEdge {
   id: number;
   fromNode: number;
   toNode: number;
   edgeType: number;
   arcId: number | null;
+  /** 伏笔埋设章（仅 edgeType=4；null = 卷级） */
+  fromChapterId: number | null;
+  /** 伏笔回收章（仅 edgeType=4；null = 卷级） */
+  toChapterId: number | null;
   /** 因果说明 / 伏笔内容 */
   label: string;
   /** 伏笔：0=活跃 1=已回收 2=失效 */
   status: number;
+  /** 手动弧度：相对类型泳道基准的垂直偏移（世界像素） */
+  bend: number;
 }
 
 /** 故事图全量 */
@@ -313,10 +332,13 @@ export interface ForeshadowView {
   label: string;
   status: number;
   fromNode: number;
-  fromTitle: string;
+  /** 埋设位置描述：「第2卷」或「第2卷·第15章 玉佩现世」 */
+  fromDesc: string;
   toNode: number;
-  toTitle: string;
-  /** 跨度 = 全局章节序差（>= 0） */
+  toDesc: string;
+  fromChapterId: number | null;
+  toChapterId: number | null;
+  /** 跨度 = 章序差（卷级按保守估算） */
   span: number;
   /** 超过阈值（settings，默认 10 章） */
   overdue: boolean;
@@ -325,21 +347,105 @@ export interface ForeshadowView {
   toTrashed: boolean;
 }
 
-/** 相邻节点（本章发展的上 / 下游项） */
-export interface StoryNeighbor {
+/** 卷内章节卡片 */
+export interface VolumeChapterBrief {
+  id: number;
+  title: string;
+  status: number;
+  wordCount: number;
+  summary: string;
+  notes: string;
+  sortOrder: number;
+  /** 全局章节序（0 起，卷序+章序） */
+  globalOrder: number;
+  /** 所属小节（章节群）；null = 未分组 */
+  groupId: number | null;
+  /** L2 画布坐标（归一化 0..1；null = 未排布，由布局算法派生） */
+  mapX: number | null;
+  mapY: number | null;
+}
+
+/** 小节（章节群）：同卷若干章节的分组，画布上渲染为组框 */
+export interface ChapterGroup {
+  id: number;
+  volumeId: number;
+  title: string;
+  sortOrder: number;
+}
+
+/** 章间连线（L2 卷内画布，0顺序..6闪回与卷级边同枚举） */
+export interface ChapterEdge {
+  id: number;
+  fromChapter: number;
+  toChapter: number;
+  edgeType: number;
+  label: string;
+  /** 伏笔：0=活跃 1=已回收 2=失效 */
+  status: number;
+  /** 手动弧度（世界像素） */
+  bend: number;
+}
+
+/** 小节连线（组框拖出：小节→小节 / 小节→章节，目标二选一） */
+export interface GroupEdge {
+  id: number;
+  volumeId: number;
+  fromGroup: number;
+  toGroup: number | null;
+  toChapter: number | null;
+  edgeType: number;
+  label: string;
+  /** 伏笔：0=活跃 1=已回收 2=失效 */
+  status: number;
+  bend: number;
+}
+
+/** 人物手动绑定（人物→卷 / 人物→章，二选一） */
+export interface CharacterBinding {
+  id: number;
+  characterId: number;
+  volumeId: number | null;
+  chapterId: number | null;
+}
+
+/** L2 卷内人物画布坐标 */
+export interface CharacterCanvasPos {
+  characterId: number;
+  mapX: number;
+  mapY: number;
+}
+
+/** 卷内视图（L2）：卷节点 + 本卷章节 + 小节 + 连线 + 人物坐标 / 绑定 */
+export interface VolumeDetail {
+  node: StoryNode;
+  chapters: VolumeChapterBrief[];
+  groups: ChapterGroup[];
+  chapterEdges: ChapterEdge[];
+  groupEdges: GroupEdge[];
+  charPositions: CharacterCanvasPos[];
+  bindings: CharacterBinding[];
+}
+
+/** 卷级相邻（本章发展卡：所属卷的上 / 下游卷） */
+export interface VolumeEdgeBrief {
   edgeId: number;
   edgeType: number;
   label: string;
-  node: StoryNode;
+  volume: StoryNode;
 }
 
-/** 本章伏笔（发展图卡片用） */
+/** 本章相关伏笔（发展图卡片用） */
 export interface ForeshadowBrief {
   edgeId: number;
   label: string;
   status: number;
-  /** 对端章节（埋设视角 = 回收章；回收视角 = 埋设章） */
-  otherNode: StoryNode;
+  /** 对端位置描述（埋设视角 = 回收位置；回收视角 = 埋设位置） */
+  otherDesc: string;
+  /** 对端章级锚点（null = 卷级，跳地图） */
+  otherChapterId: number | null;
+  /** 对端卷 id（跳地图定位用） */
+  otherVolumeId: number;
+  /** 跨度（章序差，>= 0） */
   span: number;
   overdue: boolean;
   /** 本章埋设 + 回收端已完稿 + 仍活跃 → 显示「标记已回收」轻提示 */
@@ -349,9 +455,103 @@ export interface ForeshadowBrief {
 /** 单章故事上下文（右栏「本章发展」卡） */
 export interface ChapterStoryContext {
   chapterId: number;
-  arc: StoryArc | null;
-  upstream: StoryNeighbor[];
-  downstream: StoryNeighbor[];
+  /** 本章所属卷 */
+  volume: StoryNode;
+  /** 所属卷的入边（上游卷） */
+  volumeInEdges: VolumeEdgeBrief[];
+  /** 所属卷的出边（下游卷） */
+  volumeOutEdges: VolumeEdgeBrief[];
+  /** 卷内前章（≤4） */
+  prevChapters: VolumeChapterBrief[];
+  /** 卷内后章（≤4） */
+  nextChapters: VolumeChapterBrief[];
+  /** 本章埋设的伏笔（章级锚点 = 本章） */
   planted: ForeshadowBrief[];
+  /** 本章回收的伏笔 */
   resolved: ForeshadowBrief[];
+  /** 所属卷的卷级伏笔 */
+  volumeForeshadows: ForeshadowBrief[];
+}
+
+// ========== 人物关系 / 分形画布（v0.9.13） ==========
+
+/** 人物关系大类：1血缘 2情感 3社会 4阵营 5叙事（色 / 线型由大类定） */
+export type RelationCategory = 1 | 2 | 3 | 4 | 5;
+
+/** 人物关系（character_relations 表） */
+export interface CharacterRelation {
+  id: number;
+  fromChar: number;
+  toChar: number;
+  relCategory: RelationCategory;
+  /** 子类型名（自由文本，如「母女」「师徒」） */
+  relType: string;
+  /** 自定义补充说明 */
+  label: string;
+  /** 0双向 1单向(from→to) */
+  direction: number;
+  /** null = 跨卷关系（L1 / 所有 L2 显示）；具体卷 = 仅该卷 L2 显示 */
+  volumeId: number | null;
+  createdAt: string;
+}
+
+/** 人物 × 卷出场统计（character_mentions 按卷聚合，画布人物层数据源） */
+export interface CharacterVolumePresence {
+  characterId: number;
+  name: string;
+  role: string;
+  volumeId: number;
+  mentionCount: number;
+}
+
+/** 通用画布节点类型 */
+export type CanvasNodeType = 'volume' | 'chapter' | 'character' | 'scene';
+
+/** 通用画布节点（渲染内核只认 type / 坐标 / data，不认识领域语义） */
+export interface CanvasNode {
+  id: number;
+  type: CanvasNodeType;
+  /** 世界像素坐标（左上角） */
+  x: number;
+  y: number;
+  /** 尺寸（character 圆形节点用 data.r） */
+  w: number;
+  h: number;
+  /** 标题、字数、角色、颜色等渲染载荷 */
+  data: Record<string, unknown>;
+}
+
+/** 通用画布边 kind：plot 剧情（章/卷→章/卷）· character 人物关系 · appearance 出场 */
+export type CanvasEdgeKind = 'plot' | 'character' | 'appearance';
+
+/** 通用画布边 */
+export interface CanvasEdge {
+  id: number;
+  from: number;
+  to: number;
+  kind: CanvasEdgeKind;
+  /** 剧情：0顺序 1因果 2分支 3汇合 4伏笔 5平行 6闪回；人物：关系大类 */
+  edgeType: number;
+  label: string;
+  color?: string;
+  /** 伏笔：0活跃 1已回收 2失效 */
+  status?: number;
+  /** 0双向 1单向（人物关系边） */
+  direction?: number;
+  /** 手动弧度：相对泳道基准的垂直偏移（世界像素，剧情边可拖弯落库） */
+  bend?: number;
+}
+
+/** 画布层级：L1 全书 / L2 卷内 / L3 章节（L3 本次预留） */
+export type CanvasLevel =
+  | { kind: 'L1' }
+  | { kind: 'L2'; volumeId: number }
+  | { kind: 'L3'; chapterId: number };
+
+/** 层级导航栈帧（返回时恢复视图与选中） */
+export interface LevelFrame {
+  level: CanvasLevel;
+  view: { x: number; y: number; k: number };
+  selectedId: number | null;
+  layoutStrategy: string;
 }

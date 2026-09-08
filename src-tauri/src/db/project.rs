@@ -68,7 +68,7 @@ pub fn build_project_tree(conn: &Connection, project_dir: &Path) -> Result<Proje
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, volume_id, title, word_count, sort_order, status, node_type, updated_at
+        "SELECT id, volume_id, title, word_count, sort_order, status, updated_at
          FROM chapters
          WHERE deleted_at IS NULL
          ORDER BY volume_id, sort_order, id",
@@ -82,8 +82,7 @@ pub fn build_project_tree(conn: &Connection, project_dir: &Path) -> Result<Proje
                 word_count: row.get(3)?,
                 sort_order: row.get(4)?,
                 status: row.get(5)?,
-                node_type: row.get(6)?,
-                updated_at: row.get(7)?,
+                updated_at: row.get(6)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

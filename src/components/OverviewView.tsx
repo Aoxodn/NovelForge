@@ -1,26 +1,28 @@
 /**
- * 全书总览（L2）：剧情线泳道 / 伏笔总览 / 结构总览（V6，设计文档 V1.1）。
+ * 全书总览（支撑视图，V7 设计文档 V1.1）：剧情线泳道 / 伏笔总览 / 结构总览。
  *
- * - 泳道：按 story_arcs 分行，X 轴为全局章节序；跨泳道画桥接线，
- *   hover 高亮同弧线；一眼可见多线并行、断更段、汇合点
- * - 伏笔：列表 + 过滤 + 超期预警（跨度 > 阈值，settings 可配）
- * - 结构：三幕 / 起承转合模板叠加章节轴，显示各阶段字数占比与当前位置
- * - 点击节点 / 伏笔 → 跳到故事地图定位
+ * - 泳道：X 轴 = 卷顺序（节点 = 卷）；泳道 = 剧情线（story_arcs），
+ *   卷经由「归属于该线的连线」进入泳道；跨泳道桥接线，hover 高亮该线，
+ *   一眼可见多线并行、断档（弧线空缺的卷段）与汇合点
+ * - 伏笔：列表 + 过滤 + 超期预警（跨度 > 阈值，settings 可配）；
+ *   位置粒度 = 卷级或「第N卷·第M章」，章级锚点可跳正文
+ * - 结构：三幕 / 起承转合模板叠加卷轴（一卷一阶段通常天然吻合）
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as api from '../api';
 import { useAppStore } from '../store/appStore';
+import { useEditorStore } from '../store/editorStore';
 import type { ForeshadowView, StoryGraph } from '../types/models';
+import { fmt } from '../utils/text';
 
 type Tab = 'lanes' | 'foreshadow' | 'structure';
-type DOMRectLike = { cx: number; cy: number };
 
 const ARC_KIND_NAME = ['主线', '支线', '暗线'];
 const FORESHADOW_STATUS_NAME = ['活跃', '已回收', '失效'];
 const ARC_PALETTE = ['#5b8def', '#e2b93b', '#b56ad9', '#4fc47f', '#e2734f', '#3bc7d6'];
 const arcColor = (id: number, color: string) => color || ARC_PALETTE[id % ARC_PALETTE.length];
 
-/** 结构模板：各阶段名称与章节数占比 */
+/** 结构模板：各阶段名称与卷数占比 */
 const STRUCTURE_TEMPLATES: Record<string, { name: string; share: number }[]> = {
   three: [
     { name: '第一幕·设置', share: 0.25 },
@@ -118,7 +120,6 @@ export function OverviewView() {
           onArcFilter={setArcFilter}
           onThresholdDraft={setThresholdDraft}
           onSaveThreshold={() => void saveThreshold()}
-          onJump={focusMapNode}
         />
       )}
       {tab === 'structure' && <StructureView graph={graph} onJump={focusMapNode} />}
@@ -126,49 +127,66 @@ export function OverviewView() {
   );
 }
 
-// ---------- a. 剧情线泳道 ----------
+// ---------- a. 剧情线泳道（X 轴 = 卷顺序） ----------
 
-function LanesView({ graph, onJump }: { graph: StoryGraph; onJump: (id: number) => void }) {
+function LanesView({ graph, onJump }: { graph: StoryGraph; onJump: (volumeId: number) => void }) {
   const [hoverArc, setHoverArc] = useState<'none' | number | null>(null);
-  const nodeById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph]);
+
+  const nodes = useMemo(
+    () => [...graph.nodes].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id),
+    [graph.nodes],
+  );
+  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+
+  /** 每条弧线覆盖的卷集合（经由归属于该线的连线） */
+  const arcVolumes = useMemo(() => {
+    const map = new Map<number, Set<number>>();
+    for (const e of graph.edges) {
+      if (e.arcId === null) continue;
+      const set = map.get(e.arcId) ?? new Set<number>();
+      set.add(e.fromNode);
+      set.add(e.toNode);
+      map.set(e.arcId, set);
+    }
+    return map;
+  }, [graph.edges]);
 
   const lanes = useMemo(() => {
     const items: { key: string; arcId: number | null; title: string; color: string | null }[] =
-      graph.arcs.map((a) => ({
-        key: `arc-${a.id}`,
-        arcId: a.id,
-        title: `${a.title}（${ARC_KIND_NAME[a.kind] ?? ''}）`,
-        color: arcColor(a.id, a.color),
-      }));
-    if (graph.nodes.some((n) => n.arcId === null)) {
+      graph.arcs
+        .filter((a) => arcVolumes.has(a.id))
+        .map((a) => ({
+          key: `arc-${a.id}`,
+          arcId: a.id,
+          title: `${a.title}（${ARC_KIND_NAME[a.kind] ?? ''}）`,
+          color: arcColor(a.id, a.color),
+        }));
+    const covered = new Set<number>();
+    for (const set of arcVolumes.values()) {
+      for (const v of set) covered.add(v);
+    }
+    if (nodes.some((n) => !covered.has(n.id))) {
       items.push({ key: 'none', arcId: null, title: '未分类', color: null });
     }
     return items;
-  }, [graph]);
+  }, [graph.arcs, arcVolumes, nodes]);
 
-  const total = Math.max(graph.nodes.length, 1);
+  const total = Math.max(nodes.length, 1);
   const orderPct = (order: number) => ((order + 0.5) / total) * 100;
-  /** 每条泳道的槽位高度，边桥接时算 y 用 */
   const LANE_H = 68;
   const LABEL_W = 118;
 
-  if (graph.nodes.length === 0) {
+  if (nodes.length === 0) {
     return (
       <div className="overview-body">
-        <p className="info-empty">还没有章节。先在三栏写作界面创建章节，再到故事地图排布。</p>
+        <p className="info-empty">还没有卷。到故事地图「新建卷」建立第一个故事阶段。</p>
       </div>
     );
   }
 
-  // 边桥接线端点（世界坐标：x=百分比映射到泳道区宽度，用 viewBox 归一）
   const laneYOf = (arcId: number | null) => {
     const idx = lanes.findIndex((l) => l.arcId === arcId);
     return idx * LANE_H + LANE_H / 2;
-  };
-
-  const edgeArcOf = (e: (typeof graph.edges)[number]) => {
-    if (e.arcId !== null) return e.arcId;
-    return nodeById.get(e.fromNode)?.arcId ?? 'none';
   };
 
   return (
@@ -188,11 +206,11 @@ function LanesView({ graph, onJump }: { graph: StoryGraph; onJump: (id: number) 
               const a = nodeById.get(e.fromNode);
               const b = nodeById.get(e.toNode);
               if (!a || !b) return null;
-              const x1 = (a.globalOrder + 0.5) / total * 1000;
-              const x2 = (b.globalOrder + 0.5) / total * 1000;
-              const y1 = laneYOf(a.arcId);
-              const y2 = laneYOf(b.arcId);
-              const dim = hoverArc !== null && edgeArcOf(e) !== hoverArc;
+              const x1 = ((a.sortOrder + 0.5) / total) * 1000;
+              const x2 = ((b.sortOrder + 0.5) / total) * 1000;
+              const y1 = laneYOf(e.arcId);
+              const y2 = laneYOf(e.arcId);
+              const dim = hoverArc !== null && e.arcId !== hoverArc;
               const my = (y1 + y2) / 2;
               return (
                 <path
@@ -206,7 +224,11 @@ function LanesView({ graph, onJump }: { graph: StoryGraph; onJump: (id: number) 
         </svg>
 
         {lanes.map((lane) => {
-          const nodes = graph.nodes.filter((n) => n.arcId === lane.arcId);
+          const inLane = nodes.filter((n) =>
+            lane.arcId === null
+              ? ![...arcVolumes.values()].some((s) => s.has(n.id))
+              : arcVolumes.get(lane.arcId)?.has(n.id),
+          );
           const dim = hoverArc !== null && hoverArc !== lane.arcId;
           return (
             <div
@@ -220,16 +242,16 @@ function LanesView({ graph, onJump }: { graph: StoryGraph; onJump: (id: number) 
                 {lane.title}
               </div>
               <div className="lane-track">
-                {nodes.map((n) => (
+                {inLane.map((n) => (
                   <button
                     key={n.id}
                     className="lane-chip"
-                    title={`第 ${n.globalOrder + 1} 章 · ${n.title}`}
-                    style={{ left: `${orderPct(n.globalOrder)}%`, borderColor: lane.color ?? undefined }}
+                    title={`第 ${n.sortOrder + 1} 卷 · ${n.title} · ${n.chapterCount} 章`}
+                    style={{ left: `${orderPct(n.sortOrder)}%`, borderColor: lane.color ?? undefined }}
                     onClick={() => onJump(n.id)}
                   >
-                    <span className="lane-chip-dot" data-status={n.status} />
-                    {n.title.length > 6 ? `${n.title.slice(0, 6)}…` : n.title}
+                    <span className="lane-chip-dot" data-done={n.chapterCount > 0 && n.doneChapters === n.chapterCount ? '1' : '0'} />
+                    {n.title.length > 8 ? `${n.title.slice(0, 8)}…` : n.title}
                   </button>
                 ))}
               </div>
@@ -237,28 +259,26 @@ function LanesView({ graph, onJump }: { graph: StoryGraph; onJump: (id: number) 
           );
         })}
 
-        {/* X 轴刻度（每 5 章） */}
+        {/* X 轴刻度（每卷） */}
         <div className="lane-axis" style={{ paddingLeft: LABEL_W }}>
-          {Array.from({ length: total }, (_, i) => i)
-            .filter((i) => i % 5 === 0 || i === total - 1)
-            .map((i) => (
-              <span key={i} className="lane-axis-tick" style={{ left: `${orderPct(i)}%` }}>
-                {i + 1}
-              </span>
-            ))}
+          {nodes.map((n) => (
+            <span key={n.id} className="lane-axis-tick" style={{ left: `${orderPct(n.sortOrder)}%` }}>
+              卷{n.sortOrder + 1}
+            </span>
+          ))}
         </div>
       </div>
 
       {graph.arcs.length === 0 && (
         <p className="info-empty lanes-hint">
-          还没有剧情线。到故事地图右上角「剧情线」创建主线 / 支线 / 暗线，再把节点归入，泳道就会分层。
+          还没有剧情线。到故事地图右上角「剧情线」创建主线 / 支线 / 暗线，建连线时归入，泳道就会分层。
         </p>
       )}
       <div className="lanes-legend">
         <span className="lg lg-cause">因果</span>
         <span className="lg lg-branch">分支 / 汇合</span>
         <span className="lg lg-foreshadow">伏笔回收</span>
-        <span className="legend-tip">悬停泳道高亮该线；点击节点跳转故事地图</span>
+        <span className="legend-tip">悬停泳道高亮该线；点击卷跳转故事地图</span>
       </div>
     </div>
   );
@@ -277,7 +297,6 @@ function ForeshadowTable({
   onArcFilter,
   onThresholdDraft,
   onSaveThreshold,
-  onJump,
 }: {
   rows: ForeshadowView[];
   arcs: StoryGraph['arcs'];
@@ -289,8 +308,21 @@ function ForeshadowTable({
   onArcFilter: (v: 'all' | number) => void;
   onThresholdDraft: (v: string) => void;
   onSaveThreshold: () => void;
-  onJump: (id: number) => void;
 }) {
+  const focusMapNode = useAppStore((s) => s.focusMapNode);
+  const selectChapter = useAppStore((s) => s.selectChapter);
+
+  /** 位置跳转：章级锚点 → 打开正文；卷级 → 地图定位 */
+  const jump = (chapterId: number | null, volumeId: number) => {
+    if (chapterId !== null) {
+      selectChapter(chapterId);
+      void useEditorStore.getState().loadChapter(chapterId);
+      useAppStore.getState().setViewMode('editor');
+    } else {
+      focusMapNode(volumeId);
+    }
+  };
+
   return (
     <div className="overview-body">
       <div className="filter-chips foreshadow-filter">
@@ -331,15 +363,16 @@ function ForeshadowTable({
 
       {rows.length === 0 ? (
         <p className="info-empty">
-          没有符合过滤条件的伏笔。在故事地图中拖出「伏笔回收」连线（需填内容）即可登记伏笔。
+          没有符合过滤条件的伏笔。在故事地图中拖出「伏笔回收」连线（需填内容）即可登记伏笔，
+          可精确锚定到埋设章 / 回收章。
         </p>
       ) : (
         <table className="foreshadow-table">
           <thead>
             <tr>
               <th>伏笔内容</th>
-              <th>埋设章</th>
-              <th>回收章</th>
+              <th>埋设位置</th>
+              <th>回收位置</th>
               <th>跨度</th>
               <th>状态</th>
               <th>剧情线</th>
@@ -350,14 +383,14 @@ function ForeshadowTable({
               <tr key={f.id} className={f.status === 2 ? ' invalidated' : ''}>
                 <td className="fs-label" title={f.label}>{f.label || '（未命名）'}</td>
                 <td>
-                  <button className="link-btn" onClick={() => onJump(f.fromNode)}>
-                    {f.fromTitle}
+                  <button className="link-btn" title={f.fromDesc} onClick={() => jump(f.fromChapterId, f.fromNode)}>
+                    {f.fromDesc}
                     {f.fromTrashed && <em>（回收站）</em>}
                   </button>
                 </td>
                 <td>
-                  <button className="link-btn" onClick={() => onJump(f.toNode)}>
-                    {f.toTitle}
+                  <button className="link-btn" title={f.toDesc} onClick={() => jump(f.toChapterId, f.toNode)}>
+                    {f.toDesc}
                     {f.toTrashed && <em>（回收站）</em>}
                   </button>
                 </td>
@@ -380,15 +413,18 @@ function ForeshadowTable({
   );
 }
 
-// ---------- c. 结构总览 ----------
+// ---------- c. 结构总览（叠加卷轴） ----------
 
-function StructureView({ graph, onJump }: { graph: StoryGraph; onJump: (id: number) => void }) {
+function StructureView({ graph, onJump }: { graph: StoryGraph; onJump: (volumeId: number) => void }) {
   const [tplKey, setTplKey] = useState<'three' | 'kishotenketsu'>('three');
   const template = STRUCTURE_TEMPLATES[tplKey];
-  const nodes = graph.nodes;
+  const nodes = useMemo(
+    () => [...graph.nodes].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id),
+    [graph.nodes],
+  );
   const totalWords = nodes.reduce((s, n) => s + n.wordCount, 0);
 
-  /** 按章节数占比切分阶段，统计每阶段的章节数 / 字数 / 起止章 */
+  /** 按卷数占比切分阶段，统计每阶段的卷数 / 字数 / 起止卷 */
   const stages = useMemo(() => {
     const n = nodes.length;
     let cursor = 0;
@@ -398,11 +434,12 @@ function StructureView({ graph, onJump }: { graph: StoryGraph; onJump: (id: numb
       cursor += Math.max(count, 0);
       return {
         ...t,
-        chapters: slice.length,
+        volumes: slice.length,
+        chapters: slice.reduce((s, x) => s + x.chapterCount, 0),
         words: slice.reduce((s, x) => s + x.wordCount, 0),
         first: slice[0]?.id ?? null,
-        orderStart: slice[0]?.globalOrder ?? 0,
-        orderEnd: slice[slice.length - 1]?.globalOrder ?? -1,
+        orderStart: slice[0]?.sortOrder ?? 0,
+        orderEnd: slice[slice.length - 1]?.sortOrder ?? -1,
       };
     });
   }, [nodes, template]);
@@ -410,7 +447,7 @@ function StructureView({ graph, onJump }: { graph: StoryGraph; onJump: (id: numb
   if (nodes.length === 0) {
     return (
       <div className="overview-body">
-        <p className="info-empty">还没有章节，结构总览需要至少一章。</p>
+        <p className="info-empty">还没有卷，结构总览需要至少一卷。</p>
       </div>
     );
   }
@@ -429,7 +466,7 @@ function StructureView({ graph, onJump }: { graph: StoryGraph; onJump: (id: numb
             {name}
           </button>
         ))}
-        <span className="legend-tip">模板按章节数比例切分阶段；点击阶段跳到该阶段起点</span>
+        <span className="legend-tip">模板按卷数比例切分阶段（一卷一阶段通常天然吻合）；点击阶段跳到该阶段起点</span>
       </div>
 
       <div className="structure-band">
@@ -437,12 +474,12 @@ function StructureView({ graph, onJump }: { graph: StoryGraph; onJump: (id: numb
           <button
             key={s.name}
             className="structure-stage"
-            style={{ width: `${(s.chapters / total) * 100}%` }}
+            style={{ width: `${(s.volumes / total) * 100}%` }}
             onClick={() => s.first !== null && onJump(s.first)}
-            title={`${s.name}：第 ${s.orderStart + 1} ~ ${s.orderEnd + 1} 章`}
+            title={`${s.name}：第 ${s.orderStart + 1} ~ ${s.orderEnd + 1} 卷`}
           >
             <span className="stage-name">{s.name}</span>
-            <span className="stage-chapters">{s.chapters} 章</span>
+            <span className="stage-chapters">{s.volumes} 卷 · {fmt(s.chapters)} 章</span>
           </button>
         ))}
       </div>
@@ -459,17 +496,15 @@ function StructureView({ graph, onJump }: { graph: StoryGraph; onJump: (id: numb
             </div>
             <span className="word-num">
               {totalWords > 0 ? Math.round((s.words / totalWords) * 100) : 0}% ·{' '}
-              {s.words.toLocaleString()} 字
+              {fmt(s.words)} 字
             </span>
           </div>
         ))}
       </div>
       <p className="info-empty structure-hint">
-        全书共 {total} 章 · {totalWords.toLocaleString()} 字。阶段边界是模板参考值，按你的叙事节奏调整即可。
+        全书共 {total} 卷 · {fmt(graph.nodes.reduce((s, n) => s + n.chapterCount, 0))} 章 ·{' '}
+        {fmt(totalWords)} 字。阶段边界是模板参考值，按你的叙事节奏调整即可。
       </p>
     </div>
   );
 }
-
-// 保持 anchor 引用树摇不剔除（泳道坐标计算与其共用语义）
-void (null as unknown as DOMRectLike | null);

@@ -30,21 +30,24 @@ export function WindowControls() {
     <div className="win-controls">
       <button
         className="win-btn"
-        title="最小化"
+        data-tip="最小化"
+        aria-label="最小化"
         onClick={() => void getCurrentWindow().minimize()}
       >
         <IconMinimize />
       </button>
       <button
         className="win-btn"
-        title={maximized ? '还原' : '最大化'}
+        data-tip={maximized ? '还原' : '最大化'}
+        aria-label={maximized ? '还原' : '最大化'}
         onClick={() => void getCurrentWindow().toggleMaximize()}
       >
         {maximized ? <IconRestore /> : <IconMaximize />}
       </button>
       <button
         className="win-btn win-close"
-        title="关闭"
+        data-tip="关闭"
+        aria-label="关闭"
         onClick={() => void getCurrentWindow().close()}
       >
         <IconClose />

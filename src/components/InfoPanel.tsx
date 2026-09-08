@@ -43,6 +43,21 @@ export function InfoPanel() {
   const [storyCtx, setStoryCtx] = useState<ChapterStoryContext | null>(null);
   const [showProjectOutline, setShowProjectOutline] = useState(false);
   const focusMapNode = useAppStore((s) => s.focusMapNode);
+  const setViewMode = useAppStore((s) => s.setViewMode);
+  const selectChapter = useAppStore((s) => s.selectChapter);
+
+  /** 跳到某章正文（卷内前后章 / 伏笔章级锚点） */
+  const openChapterInEditor = (id: number) => {
+    selectChapter(id);
+    void useEditorStore.getState().loadChapter(id);
+    setViewMode('editor');
+  };
+
+  /** 伏笔跳转：章级锚点 → 打开对端章正文；卷级 → 地图定位对端卷 */
+  const jumpForeshadow = (chapterId: number | null, volumeId: number) => {
+    if (chapterId !== null) openChapterInEditor(chapterId);
+    else focusMapNode(volumeId);
+  };
 
   // ---------- 本章纲要：切换章节载入，输入后 600ms 防抖自动保存 ----------
   const [chSummary, setChSummary] = useState('');
@@ -328,56 +343,88 @@ export function InfoPanel() {
           <div className="info-card">
             <h3>本章发展</h3>
             {storyCtx === null ||
-            (storyCtx.upstream.length === 0 &&
-              storyCtx.downstream.length === 0 &&
+            (storyCtx.volumeInEdges.length === 0 &&
+              storyCtx.volumeOutEdges.length === 0 &&
+              storyCtx.prevChapters.length === 0 &&
+              storyCtx.nextChapters.length === 0 &&
               storyCtx.planted.length === 0 &&
               storyCtx.resolved.length === 0 &&
-              storyCtx.arc === null) ? (
+              storyCtx.volumeForeshadows.length === 0) ? (
               <p className="info-empty">
-                本章尚未纳入故事地图。在顶栏「故事地图」中建立连接后，这里会显示它的来龙去脉。
+                本章所属卷尚未建立连线。在顶栏「故事地图」中连接两个卷，标记阶段推进或伏笔后，这里会显示来龙去脉。
               </p>
             ) : (
               <div className="story-ctx">
-                {storyCtx.arc && (
-                  <div className="story-ctx-arc">
-                    <i
-                      className="arc-swatch"
-                      style={{ background: storyCtx.arc.color || 'var(--accent)' }}
-                    />
-                    所属剧情线：{storyCtx.arc.title}
-                  </div>
-                )}
+                {/* 所属卷 */}
+                <button
+                  className="story-ctx-arc story-ctx-volume"
+                  title={`${storyCtx.volume.summary || '卷细纲未填写'}\n点击在故事地图中定位`}
+                  onClick={() => focusMapNode(storyCtx.volume.id)}
+                >
+                  第 {storyCtx.volume.sortOrder + 1} 卷 · {storyCtx.volume.title}
+                </button>
 
-                {(storyCtx.upstream.length > 0 || storyCtx.downstream.length > 0) && (
+                {/* 上游卷 → 本章 → 下游卷 */}
+                {(storyCtx.volumeInEdges.length > 0 || storyCtx.volumeOutEdges.length > 0) && (
                   <div className="story-ctx-flow">
-                    {storyCtx.upstream.slice(0, 4).map((u) => (
+                    {storyCtx.volumeInEdges.slice(0, 3).map((u) => (
                       <button
                         key={u.edgeId}
                         className="story-ctx-node"
                         title={`${edgeTypeName(u.edgeType)}${u.label ? `：${u.label}` : ''}\n点击在地图中定位`}
-                        onClick={() => focusMapNode(u.node.id)}
+                        onClick={() => focusMapNode(u.volume.id)}
                       >
                         <em>{edgeTypeName(u.edgeType)}</em>
-                        {u.node.title}
+                        {u.volume.title}
                       </button>
                     ))}
-                    {storyCtx.upstream.length > 0 && <span className="story-ctx-arrow">←</span>}
-                    <span className="story-ctx-node story-ctx-center">本章</span>
-                    {storyCtx.downstream.length > 0 && <span className="story-ctx-arrow">→</span>}
-                    {storyCtx.downstream.slice(0, 4).map((d) => (
+                    {storyCtx.volumeInEdges.length > 0 && <span className="story-ctx-arrow">←</span>}
+                    <span className="story-ctx-node story-ctx-center">本卷</span>
+                    {storyCtx.volumeOutEdges.length > 0 && <span className="story-ctx-arrow">→</span>}
+                    {storyCtx.volumeOutEdges.slice(0, 3).map((d) => (
                       <button
                         key={d.edgeId}
                         className="story-ctx-node"
                         title={`${edgeTypeName(d.edgeType)}${d.label ? `：${d.label}` : ''}\n点击在地图中定位`}
-                        onClick={() => focusMapNode(d.node.id)}
+                        onClick={() => focusMapNode(d.volume.id)}
                       >
                         <em>{edgeTypeName(d.edgeType)}</em>
-                        {d.node.title}
+                        {d.volume.title}
                       </button>
                     ))}
                   </div>
                 )}
 
+                {/* 卷内前后章 */}
+                {(storyCtx.prevChapters.length > 0 || storyCtx.nextChapters.length > 0) && (
+                  <div className="story-ctx-flow story-ctx-flow-chapters">
+                    {storyCtx.prevChapters.slice(-2).map((c) => (
+                      <button
+                        key={c.id}
+                        className="story-ctx-node"
+                        title={`前章：${c.title}\n点击跳转`}
+                        onClick={() => openChapterInEditor(c.id)}
+                      >
+                        {c.title}
+                      </button>
+                    ))}
+                    {storyCtx.prevChapters.length > 0 && <span className="story-ctx-arrow">←</span>}
+                    <span className="story-ctx-node story-ctx-center">本章</span>
+                    {storyCtx.nextChapters.length > 0 && <span className="story-ctx-arrow">→</span>}
+                    {storyCtx.nextChapters.slice(0, 2).map((c) => (
+                      <button
+                        key={c.id}
+                        className="story-ctx-node"
+                        title={`后章：${c.title}\n点击跳转`}
+                        onClick={() => openChapterInEditor(c.id)}
+                      >
+                        {c.title}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* 本章埋设的伏笔 */}
                 {storyCtx.planted.map((f) => (
                   <div key={f.edgeId} className="fs-brief">
                     <span
@@ -386,26 +433,63 @@ export function InfoPanel() {
                     >
                       {f.status === 1 ? '✓' : '埋'}
                     </span>
-                    <button className="link-btn" title={f.label} onClick={() => focusMapNode(f.otherNode.id)}>
+                    <button
+                      className="link-btn"
+                      title={`${f.label}\n回收于 ${f.otherDesc}`}
+                      onClick={() => jumpForeshadow(f.otherChapterId, f.otherVolumeId)}
+                    >
                       {f.label || '（未命名伏笔）'}
                     </button>
-                    <span className="story-ctx-more">
-                      {f.span > 0 ? `${f.span} 章` : ''}
+                    <span className="story-ctx-more" title={`回收于 ${f.otherDesc}`}>
+                      → {f.otherDesc}
+                      {f.span > 0 ? ` · ${f.span} 章` : ''}
                       {f.overdue && f.status !== 1 ? ' ⚠' : ''}
                     </span>
                   </div>
                 ))}
+
+                {/* 本章回收的伏笔 */}
                 {storyCtx.resolved.map((f) => (
                   <div key={f.edgeId} className="fs-brief">
                     <span className="fs-badge done" title="本章回收">✓</span>
-                    <button className="link-btn" title={f.label} onClick={() => focusMapNode(f.otherNode.id)}>
+                    <button
+                      className="link-btn"
+                      title={`${f.label}\n埋设于 ${f.otherDesc}`}
+                      onClick={() => jumpForeshadow(f.otherChapterId, f.otherVolumeId)}
+                    >
                       {f.label || '（未命名伏笔）'}
                     </button>
-                    <span className="story-ctx-more">
-                      {f.span > 0 ? `${f.span} 章前埋设` : '前章埋设'}
+                    <span className="story-ctx-more" title={`埋设于 ${f.otherDesc}`}>
+                      ← {f.otherDesc}
+                      {f.span > 0 ? ` · ${f.span} 章前` : ''}
                     </span>
                   </div>
                 ))}
+
+                {/* 所属卷的卷级伏笔 */}
+                {storyCtx.volumeForeshadows.length > 0 && (
+                  <div className="story-ctx-volfs">
+                    <span className="story-ctx-volfs-label">本卷伏笔（卷级）</span>
+                    {storyCtx.volumeForeshadows.slice(0, 4).map((f) => (
+                      <div key={f.edgeId} className="fs-brief">
+                        <span
+                          className={`fs-badge${f.status === 1 ? ' done' : f.overdue ? ' warn' : ''}`}
+                          title={f.status === 1 ? '已回收' : f.status === 2 ? '已失效' : '未回收'}
+                        >
+                          {f.status === 1 ? '✓' : '卷'}
+                        </span>
+                        <button
+                          className="link-btn"
+                          title={`${f.label}\n对端 ${f.otherDesc}`}
+                          onClick={() => jumpForeshadow(f.otherChapterId, f.otherVolumeId)}
+                        >
+                          {f.label || '（未命名伏笔）'}
+                        </button>
+                        <span className="story-ctx-more">{f.otherDesc}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {/* 回收建议：非阻塞轻提示（回收端已完稿且仍活跃） */}
                 {storyCtx.planted
@@ -413,8 +497,8 @@ export function InfoPanel() {
                   .slice(0, 1)
                   .map((f) => (
                     <div key={`hint-${f.edgeId}`} className="fs-resolve-hint">
-                      <span title="回收章已完稿，可标记伏笔为已回收">
-                        「{f.label || '伏笔'}」回收章已完稿
+                      <span title="回收端已完稿，可标记伏笔为已回收">
+                        「{f.label || '伏笔'}」回收端已完稿
                       </span>
                       <button
                         className="btn btn-mini"
