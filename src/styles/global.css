@@ -766,6 +766,62 @@ button:active:not(:disabled) {
   flex-shrink: 0;
 }
 
+/* ---------- 设置侧边栏 ---------- */
+.settings-panel {
+  width: 300px;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  animation: settingsSlideIn 220ms var(--ease) both;
+}
+@keyframes settingsSlideIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+.settings-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+}
+.settings-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.settings-panel .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-panel .form-row label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.settings-panel .form-row input[type="range"] {
+  width: 100%;
+}
+.settings-section {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 8px 0 2px;
+  color: var(--text);
+}
+.form-hint {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
 .info-card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);

@@ -14,7 +14,7 @@ import { ChapterEditor } from './ChapterEditor';
 import { InfoPanel } from './InfoPanel';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './TopBar';
-import { SettingsModal } from './SettingsModal';
+import { SettingsPanel } from './SettingsPanel';
 import { ExportModal } from './ExportModal';
 import { SearchPanel } from './SearchPanel';
 import { BackupModal } from './BackupModal';
@@ -159,6 +159,9 @@ export function ProjectView() {
         <ChapterTree />
         <ChapterEditor />
         <InfoPanel />
+        {showSettings && viewMode === 'editor' && (
+          <SettingsPanel onClose={() => setShowSettings(false)} />
+        )}
       </div>
       {/* 故事地图 / 全书总览：与三栏并列的独立视图（同源 story graph） */}
       {viewMode === 'map' && (
@@ -172,7 +175,6 @@ export function ProjectView() {
         </div>
       )}
       <StatusBar />
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       {showExport && <ExportModal onClose={() => setShowExport(false)} />}
       {showBackup && <BackupModal onClose={() => setShowBackup(false)} />}
       {showSearch && <SearchPanel onClose={() => setShowSearch(false)} />}
