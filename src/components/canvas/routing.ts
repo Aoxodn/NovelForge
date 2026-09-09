@@ -199,17 +199,21 @@ export function routeEdges(edges: CanvasEdge[]): RoutingResult {
       if (list) list.push(e);
       else byType.set(e.edgeType, [e]);
     }
-    for (const [type, list] of byType) {
-      list.forEach((e, i) => {
-        const sub = i - (list.length - 1) / 2;
-        const subOffset = sub === 0 ? 0 : (sub > 0 ? 1 : -1) * Math.ceil(Math.abs(sub)) * 0.4;
-        if (isPlot) {
+    if (isPlot) {
+      for (const [type, list] of byType) {
+        list.forEach((e, i) => {
+          const sub = i - (list.length - 1) / 2;
+          const subOffset = sub === 0 ? 0 : (sub > 0 ? 1 : -1) * Math.ceil(Math.abs(sub)) * 0.4;
           const base = PLOT_BASE_LANE[type] ?? 0;
           routed.push({ edge: e, lane: base + subOffset });
-        } else {
-          // 人物关系独立偏移空间：以 0 为中心，同对多条关系边错开
-          routed.push({ edge: e, lane: sub * 1.2 });
-        }
+        });
+      }
+    } else {
+      // 人物关系：同对所有关系边统一按顺序分配泳道，不按类型分组
+      // （按类型分组会导致不同类型的单条边都拿到 lane=0 而完全重叠）
+      keep.forEach((e, i) => {
+        const sub = i - (keep.length - 1) / 2;
+        routed.push({ edge: e, lane: sub * 1.2 });
       });
     }
   }

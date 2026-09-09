@@ -691,38 +691,63 @@ export function VolumeView({
           }
         },
       },
-      {
-        label: '删除人物',
-        danger: true,
-        onClick: async () => {
-          if (!window.confirm(`确定删除人物「${profile?.name ?? characterId}」？该人物的所有关系、提及记录将一并清除。`)) return;
-          try {
-            await api.deleteCharacter(characterId);
-            if (selectedChar === characterId) setSelectedChar(null);
-            await load();
-            notify();
-          } catch (err) {
-            showToast(String(err), 'error');
-          }
-        },
-      },
     ];
-    const vb = detail?.bindings.find((b) => b.volumeId === volumeId && b.characterId === characterId);
-    if (vb) {
-      items.push({
-        label: '移出本卷（解除绑定）',
-        danger: true,
-        onClick: async () => {
-          try {
-            await api.deleteCharacterBinding(vb.id);
-            await load();
-            notify();
-          } catch (err) {
-            showToast(String(err), 'error');
-          }
-        },
-      });
+    // 关联管理：列出已绑定的卷和章节，可逐个解除
+    const charBindings = (detail?.bindings ?? []).filter((b) => b.characterId === characterId);
+    if (charBindings.length > 0) {
+      items.push({ type: 'separator' } as any);
+      for (const b of charBindings) {
+        if (b.volumeId !== null) {
+          items.push({
+            label: `解除卷关联`,
+            onClick: async () => {
+              try {
+                await api.deleteCharacterBinding(b.id);
+                await load();
+                notify();
+                showToast('已解除卷关联');
+              } catch (err) {
+                showToast(String(err), 'error');
+              }
+            },
+          });
+        } else if (b.chapterId !== null) {
+          const ch = detail?.chapters.find((c) => c.id === b.chapterId);
+          items.push({
+            label: `解除章节关联：${ch?.title ?? `章${b.chapterId}`}`,
+            onClick: async () => {
+              try {
+                await api.deleteCharacterBinding(b.id);
+                await load();
+                notify();
+                showToast('已解除章节关联');
+              } catch (err) {
+                showToast(String(err), 'error');
+              }
+            },
+          });
+        }
+      }
     }
+    items.push({ type: 'separator' } as any);
+    items.push({
+      label: '永久删除角色卡',
+      danger: true,
+      onClick: async () => {
+        const name = profile?.name ?? characterId;
+        if (!window.confirm(
+          `永久删除角色卡「${name}」？\n\n此操作不可撤销，且不在回收站中。\n该角色的人设、关系、出场统计将全部清除。`,
+        )) return;
+        try {
+          await api.deleteCharacter(characterId);
+          if (selectedChar === characterId) setSelectedChar(null);
+          await load();
+          notify();
+        } catch (err) {
+          showToast(String(err), 'error');
+        }
+      },
+    });
     ContextMenu.open(e.clientX, e.clientY, items);
   };
 
@@ -1455,7 +1480,7 @@ export function VolumeView({
                   </path>
                 ))}
 
-              {/* 人物→章 手动绑定关联线（细虚线，区别于提及出场边） */}
+              {/* 人物→章 手动绑定关联线（细虚线，可点击解除） */}
               {showCharacters &&
                 (detail?.bindings ?? [])
                   .filter((b) => b.chapterId !== null)
@@ -1471,21 +1496,41 @@ export function VolumeView({
                       { x: cp.x, y: cp.y, w: WORLD_NODE_W, h: WORLD_NODE_H },
                       { x: n.cx - n.r, y: n.cy - n.r, w: n.r * 2, h: n.r * 2 },
                     );
+                    const ch = detail?.chapters.find((c) => c.id === b.chapterId);
                     return (
-                      <line
-                        key={`bind-${b.id}`}
-                        x1={a.x}
-                        y1={a.y}
-                        x2={t.x}
-                        y2={t.y}
-                        stroke={roleColor(n.role)}
-                        strokeWidth={1.4}
-                        strokeDasharray='3 4'
-                        opacity={0.55}
-                        pointerEvents='none'
-                      >
-                        <title>{`${n.name} 手动关联到此章`}</title>
-                      </line>
+                      <g key={`bind-${b.id}`}>
+                        <line
+                          x1={a.x}
+                          y1={a.y}
+                          x2={t.x}
+                          y2={t.y}
+                          stroke={roleColor(n.role)}
+                          strokeWidth={1.4}
+                          strokeDasharray='3 4'
+                          opacity={0.55}
+                        />
+                        <line
+                          x1={a.x}
+                          y1={a.y}
+                          x2={t.x}
+                          y2={t.y}
+                          stroke='transparent'
+                          strokeWidth={10}
+                          style={{ cursor: 'pointer' }}
+                          onPointerDown={(ev) => {
+                            ev.stopPropagation();
+                            if (window.confirm(`解除「${n.name}」与章节「${ch?.title ?? '?'}」的关联？`)) {
+                              api.deleteCharacterBinding(b.id).then(() => {
+                                void load();
+                                notify();
+                                showToast('已解除关联');
+                              }).catch((err) => showToast(String(err), 'error'));
+                            }
+                          }}
+                        >
+                          <title>{`${n.name} 关联到「${ch?.title ?? '?'}」——点击解除`}</title>
+                        </line>
+                      </g>
                     );
                   })}
 

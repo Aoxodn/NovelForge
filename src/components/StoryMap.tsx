@@ -637,7 +637,8 @@ export function StoryMap() {
     e.preventDefault();
     e.stopPropagation();
     const profile = profiles.find((p) => p.id === characterId);
-    ContextMenu.open(e.clientX, e.clientY, [
+    const charBindings = bindings.filter((b) => b.characterId === characterId);
+    const items: Parameters<typeof ContextMenu.open>[2] = [
       { label: '打开角色卡', onClick: () => focusCharacter(characterId) },
       {
         label: '编辑人物',
@@ -663,29 +664,54 @@ export function StoryMap() {
           }
         },
       },
-      {
-        label: '删除人物',
-        danger: true,
-        icon: <IconTrash size={14} />,
-        onClick: async () => {
-          if (!window.confirm(`确定删除人物「${profile?.name ?? characterId}」？该人物的所有关系、提及记录将一并清除。`)) return;
-          try {
-            await api.deleteCharacter(characterId);
-            setCharManual((prev) => {
-              const next = new Map(prev);
-              next.delete(characterId);
-              return next;
-            });
-            if (focusChar === characterId) setFocusChar(null);
-            setProfiles(await api.listCharacters());
-            window.dispatchEvent(new Event('nf:cards-updated'));
-            notifyStoryChanged();
-          } catch (err) {
-            showToast(String(err), 'error');
-          }
-        },
+    ];
+    // 关联卷管理：列出已绑定的卷，可逐个解除
+    if (charBindings.length > 0) {
+      items.push({ type: 'separator' } as any);
+      for (const b of charBindings) {
+        const vol = nodeById.get(b.volumeId ?? -1);
+        items.push({
+          label: `解除关联：${vol?.title ?? `卷${b.volumeId}`}`,
+          onClick: async () => {
+            try {
+              await api.deleteCharacterBinding(b.id);
+              setBindings(await api.listCharacterBindings());
+              showToast('已解除关联');
+            } catch (err) {
+              showToast(String(err), 'error');
+            }
+          },
+        });
+      }
+    }
+    items.push({ type: 'separator' } as any);
+    items.push({
+      label: '永久删除角色卡',
+      danger: true,
+      icon: <IconTrash size={14} />,
+      onClick: async () => {
+        const name = profile?.name ?? characterId;
+        if (!window.confirm(
+          `永久删除角色卡「${name}」？\n\n此操作不可撤销，且不在回收站中。\n该角色的人设、关系、出场统计将全部清除。`,
+        )) return;
+        try {
+          await api.deleteCharacter(characterId);
+          setCharManual((prev) => {
+            const next = new Map(prev);
+            next.delete(characterId);
+            return next;
+          });
+          if (focusChar === characterId) setFocusChar(null);
+          setProfiles(await api.listCharacters());
+          setBindings(await api.listCharacterBindings());
+          window.dispatchEvent(new Event('nf:cards-updated'));
+          notifyStoryChanged();
+        } catch (err) {
+          showToast(String(err), 'error');
+        }
       },
-    ]);
+    });
+    ContextMenu.open(e.clientX, e.clientY, items);
   };
 
   const onBackgroundContextMenu = (e: React.MouseEvent) => {
@@ -1116,7 +1142,7 @@ export function StoryMap() {
                 </path>
               ))}
 
-            {/* 人物→卷 手动绑定关联线（细虚线） */}
+            {/* 人物→卷 手动绑定关联线（细虚线，可点击解除） */}
             {showCharacters &&
               bindings.map((b) => {
                 const n = graphNodes.find((g) => g.characterId === b.characterId);
@@ -1124,21 +1150,41 @@ export function StoryMap() {
                 if (!n || !vp) return null;
                 const a = rectAnchor({ x: n.x - 11, y: n.y - 11, w: 22, h: 22 }, { x: vp.x, y: vp.y, w: NODE_W, h: NODE_H });
                 const c = rectAnchor({ x: vp.x, y: vp.y, w: NODE_W, h: NODE_H }, { x: n.x - 11, y: n.y - 11, w: 22, h: 22 });
+                const vol = nodeById.get(b.volumeId ?? -1);
                 return (
-                  <line
-                    key={`bind-${b.id}`}
-                    x1={a.x}
-                    y1={a.y}
-                    x2={c.x}
-                    y2={c.y}
-                    stroke={roleColor(n.role)}
-                    strokeWidth={1.4}
-                    strokeDasharray='3 4'
-                    opacity={focusSets ? (focusSets.chars.has(b.characterId) && b.volumeId !== null && focusSets.vols.has(b.volumeId) ? 0.9 : 0.08) : 0.45}
-                    pointerEvents='none'
-                  >
-                    <title>{`${charNameOf(b.characterId)} 手动关联到此卷`}</title>
-                  </line>
+                  <g key={`bind-${b.id}`}>
+                    <line
+                      x1={a.x}
+                      y1={a.y}
+                      x2={c.x}
+                      y2={c.y}
+                      stroke={roleColor(n.role)}
+                      strokeWidth={1.4}
+                      strokeDasharray='3 4'
+                      opacity={focusSets ? (focusSets.chars.has(b.characterId) && b.volumeId !== null && focusSets.vols.has(b.volumeId) ? 0.9 : 0.08) : 0.45}
+                    />
+                    {/* 宽命中区，点击解除关联 */}
+                    <line
+                      x1={a.x}
+                      y1={a.y}
+                      x2={c.x}
+                      y2={c.y}
+                      stroke='transparent'
+                      strokeWidth={10}
+                      style={{ cursor: 'pointer' }}
+                      onPointerDown={(ev) => {
+                        ev.stopPropagation();
+                        if (window.confirm(`解除「${charNameOf(b.characterId)}」与卷「${vol?.title ?? '?'}」的关联？`)) {
+                          api.deleteCharacterBinding(b.id).then(() => {
+                            api.listCharacterBindings().then(setBindings);
+                            showToast('已解除关联');
+                          }).catch((err) => showToast(String(err), 'error'));
+                        }
+                      }}
+                    >
+                      <title>{`${charNameOf(b.characterId)} 关联到「${vol?.title ?? '?'}」——点击解除`}</title>
+                    </line>
+                  </g>
                 );
               })}
 
