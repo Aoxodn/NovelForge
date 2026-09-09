@@ -74,6 +74,14 @@ export function TopBar({ onBack, onOpenSettings, onOpenExport, onOpenSearch, onO
         >
           <IconOverview />
         </button>
+        <button
+          className={`icon-btn${viewMode === 'characters' ? ' active' : ''}`}
+          data-tip="角色卡（人设独立编辑 / 搜索筛选）"
+          aria-label="角色卡"
+          onClick={() => setViewMode(viewMode === 'characters' ? 'editor' : 'characters')}
+        >
+          <IconUsers />
+        </button>
         <span className="topbar-sep" />
         <button
           className={`icon-btn${focusMode ? ' active' : ''}`}

@@ -169,7 +169,6 @@ export function ChapterEditor() {
     const ta = textareaRef.current;
     const mirror = mirrorRef.current;
     if (!ta || !mirror) return;
-    syncMirror();
     const probe = mirror.querySelector<HTMLElement>('.caret-probe');
     if (probe) {
       const target = Math.max(
@@ -181,6 +180,7 @@ export function ChapterEditor() {
       );
       if (Math.abs(ta.scrollTop - target) > 2) ta.scrollTop = target;
     }
+    syncMirror();
   }, [content, caret, focusMode, editorSettings, chapterId]);
 
   if (chapterId === null || selectedChapterId === null) {

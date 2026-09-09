@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "novelforge"
-version = "1.0.2-beta.1"
+version = "1.0.3-beta.1"
 dependencies = [
  "encoding_rs",
  "quick-xml 0.42.0",

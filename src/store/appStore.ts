@@ -30,8 +30,10 @@ interface AppStore {
   writerSettings: WriterSettings;
   /** 专注模式：隐藏目录 / 信息两栏，正文居中限宽（会话级偏好，不持久化） */
   focusMode: boolean;
-  /** 主区视图：editor=三栏写作 map=故事地图 overview=全书总览（三栏保持挂载） */
-  viewMode: 'editor' | 'map' | 'overview';
+  /** 主区视图：editor=三栏写作 map=故事地图 overview=全书总览 characters=角色卡（三栏保持挂载） */
+  viewMode: 'editor' | 'map' | 'overview' | 'characters';
+  /** 请求角色卡视图定位高亮某角色（图谱节点跳转用，消费后自清） */
+  charFocusId: number | null;
   /** 请求故事地图定位高亮某卷节点（InfoPanel / 总览跳转用，消费后自清） */
   mapFocusNodeId: number | null;
   /** 今日累计码字（打开项目时拉取，保存后由后端权威值刷新） */
@@ -50,7 +52,10 @@ interface AppStore {
   closeProject: () => Promise<void>;
   refreshTree: () => Promise<void>;
   selectChapter: (id: number | null) => void;
-  setViewMode: (m: 'editor' | 'map' | 'overview') => void;
+  setViewMode: (m: 'editor' | 'map' | 'overview' | 'characters') => void;
+  /** 切到角色卡并定位高亮某角色 */
+  focusCharacter: (characterId: number) => void;
+  clearCharFocus: () => void;
   /** 切到故事地图并定位高亮卷节点 */
   focusMapNode: (volumeId: number) => void;
   clearMapFocus: () => void;
@@ -112,6 +117,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   focusMode: false,
   viewMode: 'editor',
   mapFocusNodeId: null,
+  charFocusId: null,
   todayWords: 0,
   toast: null,
   pendingImportPath: null,
@@ -145,7 +151,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   closeProject: async () => {
     await api.closeProject();
-    set({ tree: null, selectedChapterId: null, todayWords: 0, viewMode: 'editor', mapFocusNodeId: null });
+    set({ tree: null, selectedChapterId: null, todayWords: 0, viewMode: 'editor', mapFocusNodeId: null, charFocusId: null });
   },
 
   refreshTree: async () => {
@@ -169,6 +175,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ viewMode: 'map', mapFocusNodeId: volumeId }),
 
   clearMapFocus: () => set({ mapFocusNodeId: null }),
+
+  focusCharacter: (characterId) =>
+    set({ viewMode: 'characters', charFocusId: characterId }),
+
+  clearCharFocus: () => set({ charFocusId: null }),
 
   setPendingImportPath: (p) => set({ pendingImportPath: p }),
 

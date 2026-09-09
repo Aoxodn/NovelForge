@@ -102,6 +102,7 @@ function truncate(s: string, n: number) {
 
 export function StoryMap() {
   const setViewMode = useAppStore((s) => s.setViewMode);
+  const focusCharacter = useAppStore((s) => s.focusCharacter);
   const mapFocusNodeId = useAppStore((s) => s.mapFocusNodeId);
   const clearMapFocus = useAppStore((s) => s.clearMapFocus);
   const refreshTree = useAppStore((s) => s.refreshTree);
@@ -663,6 +664,7 @@ export function StoryMap() {
     e.stopPropagation();
     const profile = profiles.find((p) => p.id === characterId);
     ContextMenu.open(e.clientX, e.clientY, [
+      { label: '打开角色卡', onClick: () => focusCharacter(characterId) },
       {
         label: '编辑人物',
         onClick: () => {
@@ -1470,13 +1472,10 @@ export function StoryMap() {
                     onPointerDown={(ev) => onCharDown(ev, n)}
                     onContextMenu={(e) => onCharContextMenu(e, n.characterId)}
                   >
-                    <circle r="13" className="sm-char-halo" style={{ stroke: roleColor(n.role) }} />
-                    <circle r="11" className="sm-char-body" style={{ fill: roleColor(n.role) }} />
-                    <text textAnchor="middle" dy="3.5" className="sm-char-initial">
-                      {n.name.slice(0, 1)}
-                    </text>
-                    <text textAnchor="middle" y="24" className="sm-char-name">
-                      {truncate(n.name, 5)}
+                    <circle r="9" className="sm-char-halo" style={{ stroke: roleColor(n.role) }} />
+                    <circle r="7" className="sm-char-body" style={{ fill: roleColor(n.role) }} />
+                    <text textAnchor="middle" y="20" className="sm-char-name sm-char-name-full">
+                      {n.name}
                     </text>
                     {/* 拉线圆点：拖到人物建关系，拖到卷卡绑定 */}
                     <circle

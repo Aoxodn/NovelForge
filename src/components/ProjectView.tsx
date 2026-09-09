@@ -23,6 +23,7 @@ import { StatsModal } from './StatsModal';
 import { NameGeneratorModal } from './NameGeneratorModal';
 import { StoryMap } from './StoryMap';
 import { OverviewView } from './OverviewView';
+import { CharacterCardView } from './CharacterCardView';
 
 /** 自动备份周期（文档：每 30 分钟） */
 const AUTO_BACKUP_INTERVAL_MS = 30 * 60 * 1000;
@@ -172,6 +173,11 @@ export function ProjectView() {
       {viewMode === 'overview' && (
         <div className="story-view">
           <OverviewView />
+        </div>
+      )}
+      {viewMode === 'characters' && (
+        <div className="story-view">
+          <CharacterCardView />
         </div>
       )}
       <StatusBar />

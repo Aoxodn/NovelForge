@@ -26,6 +26,11 @@ interface DragState {
   chapterId: number;
   fromVolumeId: number;
 }
+interface VolumeDragState {
+  type: 'volume';
+  volumeId: number;
+}
+type AnyDrag = DragState | VolumeDragState | null;
 
 export function ChapterTree() {
   const tree = useAppStore((s) => s.tree)!;
@@ -39,7 +44,9 @@ export function ChapterTree() {
   const clearEditor = useEditorStore((s) => s.clear);
 
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
-  const [drag, setDrag] = useState<DragState | null>(null);
+  const [drag, setDrag] = useState<AnyDrag>(null);
+  /** 卷拖拽时的悬停位置（用于显示插入指示线） */
+  const [dragOverVol, setDragOverVol] = useState<{ volumeId: number; pos: 'before' | 'after' } | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [prompt, setPrompt] = useState<
     | { kind: 'newVolume' }
@@ -186,7 +193,7 @@ export function ChapterTree() {
   };
 
   const dropOnVolume = async (volumeId: number) => {
-    if (!drag) return;
+    if (!drag || drag.type !== 'chapter') return;
     const list = chaptersByVolume.get(volumeId) ?? [];
     if (drag.fromVolumeId === volumeId) return; // 同卷且目标是卷尾 = 无操作（除非想移到末尾）
     try {
@@ -200,7 +207,7 @@ export function ChapterTree() {
   };
 
   const dropOnChapter = async (target: ChapterMeta) => {
-    if (!drag) return;
+    if (!drag || drag.type !== 'chapter') return;
     if (drag.chapterId === target.id) return;
     const list = chaptersByVolume.get(target.volumeId) ?? [];
     let targetIndex = list.findIndex((c) => c.id === target.id);
@@ -287,6 +294,33 @@ export function ChapterTree() {
     }
   };
 
+  // 卷拖拽排序：拖到目标卷的上方或下方
+  const dropVolumeReorder = async (targetVolumeId: number, pos: 'before' | 'after') => {
+    if (!drag || drag.type !== 'volume') return;
+    if (drag.volumeId === targetVolumeId) {
+      setDrag(null);
+      setDragOverVol(null);
+      return;
+    }
+    const fromIdx = tree.volumes.findIndex((v) => v.id === drag.volumeId);
+    let targetIdx = tree.volumes.findIndex((v) => v.id === targetVolumeId);
+    if (fromIdx === -1 || targetIdx === -1) return;
+    // 同方向拖动时补偿被移出元素的位移
+    if (fromIdx < targetIdx && pos === 'before') targetIdx -= 1;
+    if (fromIdx < targetIdx && pos === 'after') targetIdx -= 0; // after 不需要补偿
+    if (pos === 'after') targetIdx += 1;
+    targetIdx = Math.max(0, Math.min(targetIdx, tree.volumes.length));
+    try {
+      await api.moveVolume(drag.volumeId, targetIdx);
+      await refreshTree();
+    } catch (e) {
+      showToast(String(e), 'error');
+    } finally {
+      setDrag(null);
+      setDragOverVol(null);
+    }
+  };
+
   const toggleCollapse = (id: number) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -301,7 +335,10 @@ export function ChapterTree() {
   return (
     <aside
       className="sidebar"
-      onDragEnd={() => setDrag(null)}
+      onDragEnd={() => {
+        setDrag(null);
+        setDragOverVol(null);
+      }}
       onContextMenu={blankMenu}
     >
       <div className="sidebar-header">
@@ -354,13 +391,38 @@ export function ChapterTree() {
           return (
             <div key={volume.id} className="volume-group">
               <div
-                className="volume-row"
+                className={`volume-row${dragOverVol?.volumeId === volume.id ? ` drop-${dragOverVol.pos}` : ''}${drag?.type === 'volume' && drag.volumeId === volume.id ? ' dragging' : ''}`}
+                draggable
                 onClick={() => toggleCollapse(volume.id)}
                 onContextMenu={(e) => volumeMenu(e, volume)}
-                onDragOver={(e) => {
-                  if (drag) e.preventDefault();
+                onDragStart={(e) => {
+                  e.stopPropagation();
+                  setDrag({ type: 'volume', volumeId: volume.id });
+                  e.dataTransfer.effectAllowed = 'move';
                 }}
-                onDrop={() => dropOnVolume(volume.id)}
+                onDragOver={(e) => {
+                  if (drag?.type === 'volume') {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                    setDragOverVol({ volumeId: volume.id, pos });
+                  } else if (drag) {
+                    e.preventDefault();
+                  }
+                }}
+                onDragLeave={() => {
+                  if (dragOverVol?.volumeId === volume.id) setDragOverVol(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (drag?.type === 'volume') {
+                    void dropVolumeReorder(volume.id, dragOverVol?.pos ?? 'after');
+                  } else {
+                    dropOnVolume(volume.id);
+                  }
+                }}
               >
                 <IconChevron open={!isCollapsed} />
                 <span className="volume-title" title={volume.title}>

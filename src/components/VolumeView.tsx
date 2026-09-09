@@ -103,6 +103,7 @@ export function VolumeView({
 }) {
   const showToast = useAppStore((s) => s.showToast);
   const refreshTree = useAppStore((s) => s.refreshTree);
+  const focusCharacter = useAppStore((s) => s.focusCharacter);
   const [detail, setDetail] = useState<VolumeDetail | null>(null);
   const [mentions, setMentions] = useState<CharMention[]>([]);
   const [presence, setPresence] = useState<CharacterVolumePresence[]>([]);
@@ -690,6 +691,7 @@ export function VolumeView({
     const profile = profiles.find((p) => p.id === characterId);
     const items: Parameters<typeof ContextMenu.open>[2] = [
       { label: '查看人物详情', onClick: () => setSelectedChar(characterId) },
+      { label: '打开角色卡', onClick: () => focusCharacter(characterId) },
       {
         label: '编辑人物',
         onClick: () => {
@@ -1887,13 +1889,10 @@ export function VolumeView({
                       onPointerDown={(e) => onCharDown(e, c)}
                       onContextMenu={(e) => onCharContextMenu(e, c.characterId)}
                     >
-                      <circle r={c.r + 2} className="sm-char-halo" style={{ stroke: roleColor(c.role) }} />
-                      <circle r={c.r} className="sm-char-body" style={{ fill: roleColor(c.role) }} />
-                      <text textAnchor="middle" dy="3.5" className="sm-char-initial">
-                        {c.name.slice(0, 1)}
-                      </text>
-                      <text textAnchor="middle" y={c.r + 13} className="sm-char-name">
-                        {c.name.length > 5 ? `${c.name.slice(0, 5)}…` : c.name}
+                      <circle r={Math.max(c.r * 0.7, 7)} className="sm-char-halo" style={{ stroke: roleColor(c.role) }} />
+                      <circle r={Math.max(c.r * 0.6, 6)} className="sm-char-body" style={{ fill: roleColor(c.role) }} />
+                      <text textAnchor="middle" y={Math.max(c.r * 0.6, 6) + 14} className="sm-char-name sm-char-name-full">
+                        {c.name}
                       </text>
                       {/* 拉线圆点：拖到人物建关系，拖到章节绑定 */}
                       <circle
