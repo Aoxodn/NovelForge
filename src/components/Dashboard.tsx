@@ -6,7 +6,8 @@ import { useAppStore } from "../store/appStore";
 import type { RecentProject } from "../types/models";
 import { NewProjectModal } from "./NewProjectModal";
 import { WindowControls } from "./WindowControls";
-import { IconDocPlus, IconFolderPlus, IconImport, IconTrash } from "./icons";
+import { IconDocPlus, IconFolderPlus, IconImport, IconMore, IconTrash } from "./icons";
+import { ContextMenu } from "./ContextMenu";
 import "../styles/dashboard.css";
 
 /** 书封底色：按书名哈希从固定色板取色，同一本书永远同色 */
@@ -74,6 +75,24 @@ export function Dashboard() {
     try {
       await api.removeRecentProject(path);
       await refresh();
+    } catch (e) {
+      showToast(String(e), "error");
+    }
+  };
+
+  const renameProject = async (path: string, oldName: string) => {
+    const name = window.prompt("修改书名", oldName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      showToast("书名不能为空", "error");
+      return;
+    }
+    if (trimmed === oldName) return;
+    try {
+      await api.renameProjectByPath(path, trimmed);
+      await refresh();
+      showToast("已修改书名");
     } catch (e) {
       showToast(String(e), "error");
     }
@@ -248,11 +267,26 @@ export function Dashboard() {
                       </span>
                     </button>
                     <button
-                      className="icon-btn book-remove"
-                      title="从书架移除"
-                      onClick={() => removeRecent(p.path)}
+                      className="icon-btn book-more"
+                      title="更多操作"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        ContextMenu.open(e.clientX, e.clientY, [
+                          {
+                            label: "改名",
+                            onClick: () => void renameProject(p.path, p.name),
+                          },
+                          { type: "separator" } as any,
+                          {
+                            label: "从书架移除",
+                            danger: true,
+                            icon: <IconTrash size={14} />,
+                            onClick: () => void removeRecent(p.path),
+                          },
+                        ]);
+                      }}
                     >
-                      <IconTrash />
+                      <IconMore />
                     </button>
                   </div>
                 ))}

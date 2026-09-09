@@ -684,7 +684,7 @@
 .book-card.opening .book-cover {
   animation: bookOpen 500ms cubic-bezier(0.5, 0, 0.75, 0.35) forwards;
 }
-.book-remove {
+.book-more {
   position: absolute;
   z-index: 4;
   top: 10px;
@@ -701,12 +701,12 @@
   box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
   transition: opacity 150ms ease;
 }
-.book-slot:hover .book-remove,
-.book-remove:focus-visible {
+.book-slot:hover .book-more,
+.book-more:focus-visible {
   opacity: 1;
 }
-.book-remove:hover {
-  color: #ff3b30;
+.book-more:hover {
+  color: var(--dash-text);
 }
 
 /* First-run dialogs use the same restrained material and spacing. */

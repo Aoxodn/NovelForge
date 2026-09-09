@@ -72,6 +72,9 @@ export const updateProjectInfo = (patch: { name?: string; author?: string; descr
     description: patch.description ?? null,
   });
 
+export const renameProjectByPath = (path: string, name: string) =>
+  cmd<void>('rename_project_by_path', { path, name });
+
 export const listRecentProjects = () =>
   cmd<RecentProject[]>('list_recent_projects');
 

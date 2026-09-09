@@ -268,6 +268,63 @@ pub fn update_project_info(
     Ok(tree)
 }
 
+/// 按路径重命名未打开的项目（书架页使用）。
+/// 同步更新三处：项目库 project_info 表、project.novel 标识文件、全局 recent_projects 表。
+/// 不改动项目目录名。
+#[tauri::command]
+pub fn rename_project_by_path(
+    state: State<'_, AppState>,
+    path: String,
+    name: String,
+) -> Result<()> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::Msg("书名不能为空".into()));
+    }
+
+    let project_dir = std::path::PathBuf::from(&path);
+    let db_path = project_dir.join("database").join("novel.db");
+    if !db_path.exists() {
+        return Err(AppError::Msg(format!(
+            "项目数据库缺失：{}",
+            db_path.display()
+        )));
+    }
+
+    // 打开项目库，更新 project_info
+    let conn = db::open_project_db(&db_path)?;
+    conn.execute(
+        "UPDATE project_info SET name = ?1, updated_at = datetime('now','localtime') WHERE id = 1",
+        params![name],
+    )?;
+    drop(conn);
+
+    // 同步更新 project.novel 标识文件
+    let marker_path = project_dir.join("project.novel");
+    if let Ok(content) = std::fs::read_to_string(&marker_path) {
+        if let Ok(mut marker) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(obj) = marker.as_object_mut() {
+                obj.insert("name".into(), serde_json::Value::String(name.clone()));
+                if let Ok(written) = serde_json::to_string_pretty(&marker) {
+                    let _ = std::fs::write(&marker_path, written);
+                }
+            }
+        }
+    }
+
+    // 同步更新全局 recent_projects
+    let path_str = project_dir.to_string_lossy().to_string();
+    let _ = state.with_global(|gconn| {
+        gconn.execute(
+            "UPDATE recent_projects SET name = ?1 WHERE path = ?2",
+            params![name, path_str],
+        )?;
+        Ok(())
+    });
+
+    Ok(())
+}
+
 /// 最近打开的项目列表
 #[tauri::command]
 pub fn list_recent_projects(state: State<'_, AppState>) -> Result<Vec<RecentProject>> {

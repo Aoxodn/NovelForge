@@ -55,6 +55,7 @@ pub fn run() {
             commands::project::close_project,
             commands::project::update_project_outline,
             commands::project::update_project_info,
+            commands::project::rename_project_by_path,
             commands::project::list_recent_projects,
             commands::project::remove_recent_project,
             // 卷
