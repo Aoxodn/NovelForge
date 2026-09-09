@@ -161,7 +161,7 @@ export function StoryMap() {
   const svgRef = useRef<SVGSVGElement | null>(null);
   // 视口（平移/缩放/世界坐标/fitBounds）收敛到共享 hook（审查 P2-2）
   const { view, setView, viewRef, toWorld, fitBounds } =
-    useCanvasViewport(svgRef, drilledVolumeId);
+    useCanvasViewport(svgRef, drilledVolumeId, graph !== null);
   const positionsRef = useRef(positions);
   positionsRef.current = positions;
   /** 指针交互状态：pan / node / connect */
@@ -1609,6 +1609,7 @@ export function StoryMap() {
             try {
               await api.moveCharacterNode(p.id, charPick.x, charPick.y);
               setCharPick(null);
+              setShowCharacters(true);
               setProfiles(await api.listCharacters());
               showToast(`已将「${p.name}」放上图谱，可自由拖动`);
             } catch (e) {

@@ -588,8 +588,16 @@ const MIGRATIONS: &[(i64, &str)] = &[(
         created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_continuity_fp ON continuity_issues(fingerprint);
+    "),
+    // V18（人物列表自定义排序）：characters 增加 sort_order，作者可手动拖拽排序。
+    (
+        18,
+        "
+    ALTER TABLE characters ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS idx_characters_sort ON characters(sort_order);
     ",
-)];
+    )
+];
 
 /// 应用所有未执行的迁移
 pub fn apply(conn: &Connection) -> Result<()> {

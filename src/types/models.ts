@@ -178,6 +178,8 @@ export interface CharacterProfile {
   tags: string[];
   /** 自定义字段（键值对，作者按需扩展） */
   customFields: Record<string, string>;
+  /** 自定义排序序号（0 = 未设置） */
+  sortOrder: number;
 }
 
 /** 人物群像扩展字段（更新时按需传入） */

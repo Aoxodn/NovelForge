@@ -98,6 +98,17 @@ export const IconSearch = ({ size = 16 }: P) => (
   </svg>
 );
 
+export const IconGripVertical = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <circle cx="9" cy="6" r="1.3" />
+    <circle cx="15" cy="6" r="1.3" />
+    <circle cx="9" cy="12" r="1.3" />
+    <circle cx="15" cy="12" r="1.3" />
+    <circle cx="9" cy="18" r="1.3" />
+    <circle cx="15" cy="18" r="1.3" />
+  </svg>
+);
+
 export const IconShield = ({ size = 16 }: P) => (
   <svg {...base(size)}>
     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />

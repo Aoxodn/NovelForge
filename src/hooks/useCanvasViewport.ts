@@ -19,10 +19,13 @@ export interface Pt {
  *
  * @param svgRef 画布 SVG 引用
  * @param rebindKey 该值变化时重新绑定滚轮缩放（如下钻卷内导致 SVG 重挂载）
+ * @param ready SVG 是否已挂载到 DOM（条件渲染的画布在数据加载前不渲染 SVG，
+ *              此时 effect 拿不到 ref；ready 变 true 后会重新绑定滚轮）
  */
 export function useCanvasViewport(
   svgRef: React.RefObject<SVGSVGElement | null>,
   rebindKey: unknown = null,
+  ready = true,
 ) {
   const [view, setView] = useState<CanvasView>({ x: 0, y: 0, k: 1 });
   const viewRef = useRef(view);
@@ -79,8 +82,9 @@ export function useCanvasViewport(
     [svgRef],
   );
 
-  // 滚轮缩放（以光标为中心）；rebindKey 变化 / SVG 重挂载时重绑
+  // 滚轮缩放（以光标为中心）；rebindKey 变化 / SVG 重挂载 / ready 变 true 时重绑
   useEffect(() => {
+    if (!ready) return;
     const svg = svgRef.current;
     if (!svg) return;
     const onWheel = (e: WheelEvent) => {
@@ -91,7 +95,7 @@ export function useCanvasViewport(
     svg.addEventListener('wheel', onWheel, { passive: false });
     return () => svg.removeEventListener('wheel', onWheel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [svgRef, zoomAt, rebindKey]);
+  }, [svgRef, zoomAt, rebindKey, ready]);
 
   return {
     view,

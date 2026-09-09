@@ -256,7 +256,7 @@ pub struct CharacterMetaInput {
 fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, aliases, role, notes, map_x, map_y, exclude_words,
-                faction, alive, importance, is_pov, tags, custom_fields
+                faction, alive, importance, is_pov, tags, custom_fields, sort_order
          FROM characters ORDER BY importance DESC, name",
     )?;
     let base = stmt
@@ -276,6 +276,7 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
                 r.get::<_, i64>(11)?,
                 r.get::<_, String>(12)?,
                 r.get::<_, String>(13)?,
+                r.get::<_, i64>(14)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -304,7 +305,7 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
         .into_iter()
         .map(
             |(id, name, aliases, role, notes, map_x, map_y, exclude_words,
-              faction, alive, importance, is_pov, tags, custom_fields)| {
+              faction, alive, importance, is_pov, tags, custom_fields, sort_order)| {
             let (total, ch_count) = agg.get(&id).copied().unwrap_or((0, 0));
             let end = ends.get(&id);
             CharacterProfile {
@@ -328,6 +329,7 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
                 is_pov: is_pov != 0,
                 tags: parse_aliases(&tags),
                 custom_fields: serde_json::from_str(&custom_fields).unwrap_or(serde_json::json!({})),
+                sort_order,
             }
         })
         .collect())
@@ -583,6 +585,25 @@ pub fn update_character(
             mention_index::invalidate_cache();
             rebuild_all_mentions(&db.conn, None)?;
         }
+        Ok(())
+    })
+}
+
+/// 批量更新人物自定义排序（拖拽排序后一次性落库，单事务）
+#[tauri::command]
+pub fn reorder_characters(
+    state: State<'_, AppState>,
+    orders: Vec<(i64, i64)>,
+) -> Result<()> {
+    state.with_project(|db| {
+        let tx = db.conn.unchecked_transaction()?;
+        for (id, sort_order) in &orders {
+            tx.execute(
+                "UPDATE characters SET sort_order = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+                params![sort_order, id],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     })
 }

@@ -1,24 +1,28 @@
 /**
- * 人物 / 地点卡管理（阶段 6）：作者手动建卡 + 精确匹配统计。
- *
- * 设计原则（与阶段 5 自动识别的本质区别）：
- * - 无候选 / 无确认流程——作者建谁就是谁，引擎只做精确计数
- * - 建卡即出统计：出现次数 / 覆盖章数 / 首末章 / 热度走势 / 断档预警
- * - 别名合并计数（「林默」与「默儿」计入同一张卡）
+ * 人物 / 地点卡管理（阶段 6 + 审查 UX-3 群像增强）：
+ * - 搜索（名字 / 别名 / 阵营 / 标签）
+ * - 多维排序（名字 / 重要度 / 出场次数 / 角色定位 / 自定义拖拽）
+ * - 分类筛选（角色定位 / 存亡 / POV）
+ * - 群像扩展字段（阵营 / 存亡 / 重要度 / POV / 标签）
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as api from '../api';
 import { useAppStore } from '../store/appStore';
 import { Modal } from './Modal';
-import { IconDice, IconMapPin, IconPlus, IconRefresh, IconTrash, IconUsers } from './icons';
+import { IconDice, IconMapPin, IconPlus, IconRefresh, IconTrash, IconUsers, IconGripVertical, IconSearch } from './icons';
 import { fmt } from '../utils/text';
-import type { CharacterHeat, CharacterProfile, CharacterRelation, LocationProfile } from '../types/models';
+import type { CharacterHeat, CharacterMeta, CharacterProfile, CharacterRelation, LocationProfile } from '../types/models';
 import { REL_CATEGORY_STYLE, REL_TYPE_OPTIONS } from './canvas/routing';
 
 /** 断档预警阈值：超过 N 章未出场才提示（短断档是正常写作节奏） */
 const ABSENT_WARN_THRESHOLD = 10;
 
 const ROLES = ['', '主角', '配角', '反派', '龙套'];
+const IMPORTANCE_LABELS = ['龙套', '次要', '配角', '核心主角'];
+
+type SortMode = 'name' | 'importance' | 'mentions' | 'role' | 'custom';
+type AliveFilter = 'all' | 'alive' | 'dead';
+type PovFilter = 'all' | 'pov' | 'nonpov';
 
 /** 热度走势：纯 SVG 柱状图，零依赖 */
 function HeatBars({ heat }: { heat: CharacterHeat }) {
@@ -62,7 +66,7 @@ function HeatBars({ heat }: { heat: CharacterHeat }) {
   );
 }
 
-/** 人物编辑表单（新建 / 编辑共用） */
+/** 人物编辑表单（新建 / 编辑共用，含群像扩展字段） */
 export function CharacterForm({
   initial,
   onSubmit,
@@ -70,7 +74,14 @@ export function CharacterForm({
   busy,
 }: {
   initial?: CharacterProfile;
-  onSubmit: (v: { name: string; aliases: string[]; role: string; notes: string; excludeWords: string[] }) => void;
+  onSubmit: (v: {
+    name: string;
+    aliases: string[];
+    role: string;
+    notes: string;
+    excludeWords: string[];
+    meta: CharacterMeta;
+  }) => void;
   onCancel: () => void;
   busy: boolean;
 }) {
@@ -79,6 +90,14 @@ export function CharacterForm({
   const [role, setRole] = useState(initial?.role ?? '');
   const [notes, setNotes] = useState(initial?.notes ?? '');
   const [excludeWords, setExcludeWords] = useState(initial?.excludeWords?.join('、') ?? '');
+  // 群像扩展字段
+  const [faction, setFaction] = useState(initial?.faction ?? '');
+  const [alive, setAlive] = useState<'unknown' | 'alive' | 'dead'>(
+    initial?.alive === null ? 'unknown' : initial?.alive ? 'alive' : 'dead',
+  );
+  const [importance, setImportance] = useState(initial?.importance ?? 1);
+  const [isPov, setIsPov] = useState(initial?.isPov ?? false);
+  const [tags, setTags] = useState(initial?.tags?.join('、') ?? '');
   const isSingleChar = [...name.trim()].length === 1;
 
   const submit = () => {
@@ -90,7 +109,18 @@ export function CharacterForm({
       .split(/[、,，;；\s]+/)
       .map((s) => s.trim())
       .filter(Boolean);
-    onSubmit({ name: name.trim(), aliases: list, role, notes: notes.trim(), excludeWords: excl });
+    const tagList = tags
+      .split(/[、,，;；\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const meta: CharacterMeta = {
+      faction: faction.trim(),
+      alive: alive === 'unknown' ? null : alive === 'alive',
+      importance,
+      isPov,
+      tags: tagList,
+    };
+    onSubmit({ name: name.trim(), aliases: list, role, notes: notes.trim(), excludeWords: excl, meta });
   };
 
   return (
@@ -114,15 +144,65 @@ export function CharacterForm({
           placeholder="如：默儿、林师兄（用顿号或逗号分隔）"
         />
       </div>
-      <div className="form-row">
-        <label>角色定位</label>
-        <select className="select" value={role} onChange={(e) => setRole(e.target.value)}>
-          {ROLES.map((r) => (
-            <option key={r} value={r}>
-              {r || '未设定'}
-            </option>
-          ))}
-        </select>
+      <div className="form-row form-row-3col">
+        <div>
+          <label>角色定位</label>
+          <select className="select" value={role} onChange={(e) => setRole(e.target.value)}>
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {r || '未设定'}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label>重要度</label>
+          <select className="select" value={importance} onChange={(e) => setImportance(Number(e.target.value))}>
+            {IMPORTANCE_LABELS.map((label, i) => (
+              <option key={i} value={i}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label>存亡</label>
+          <select className="select" value={alive} onChange={(e) => setAlive(e.target.value as typeof alive)}>
+            <option value="unknown">未知</option>
+            <option value="alive">存活</option>
+            <option value="dead">死亡</option>
+          </select>
+        </div>
+      </div>
+      <div className="form-row form-row-3col">
+        <div>
+          <label>阵营 / 势力</label>
+          <input
+            className="input"
+            value={faction}
+            onChange={(e) => setFaction(e.target.value)}
+            placeholder="如：青云宗"
+          />
+        </div>
+        <div>
+          <label>标签</label>
+          <input
+            className="input"
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="如：智者、黑化、伏笔（顿号分隔）"
+          />
+        </div>
+        <div className="form-pov-check">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={isPov}
+              onChange={(e) => setIsPov(e.target.checked)}
+            />
+            POV 视角人物
+          </label>
+        </div>
       </div>
       <div className="form-row">
         <label>备注</label>
@@ -144,7 +224,7 @@ export function CharacterForm({
             placeholder="如：简单、简历、简介（这些词里的「简」不算人名）"
           />
           <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
-            单字名会被常用词误判（如「简」在「简单」中），填入排除词后统计时自动跳过。新建时已自动填入常见误判词，可自行增删。
+            单字名会被常用词误判（如「简」在「简单」中），填入排除词后统计时自动跳过。
           </div>
         </div>
       )}
@@ -208,7 +288,7 @@ function LocationForm({
   );
 }
 
-/** 人物关系管理区（v0.9.13 广义人物关系体系）：五类关系的新建 / 编辑 / 删除 */
+/** 人物关系管理区 */
 function RelationsSection({
   characterId,
   characters,
@@ -225,7 +305,6 @@ function RelationsSection({
   const mine = relations.filter((r) => r.fromChar === characterId || r.toChar === characterId);
   const nameById = new Map(characters.map((c) => [c.id, c.name]));
 
-  // 新建表单
   const [otherId, setOtherId] = useState<number | ''>('');
   const [category, setCategory] = useState(3);
   const [relType, setRelType] = useState('');
@@ -294,7 +373,6 @@ function RelationsSection({
                   onClick={() => {
                     const other = characters.find((c) => c.id === otherId2);
                     if (other) {
-                      // 展开对方卡片不便（列表折叠态），此处仅提示
                       showToast(`对方：${other.name}（${other.role || '未设定'}）`);
                     }
                   }}
@@ -373,6 +451,8 @@ function RelationsSection({
   );
 }
 
+const ROLE_ORDER: Record<string, number> = { 主角: 0, 配角: 1, 反派: 2, 龙套: 3, '': 4 };
+
 export function CardsModal({ onClose }: { onClose: () => void }) {
   const showToast = useAppStore((s) => s.showToast);
   const [tab, setTab] = useState<'characters' | 'locations'>('characters');
@@ -381,11 +461,18 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
   const [relations, setRelations] = useState<CharacterRelation[]>([]);
   const [busy, setBusy] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
-  /** 展开编辑的卡 id；'new' 表示新建表单 */
   const [editing, setEditing] = useState<number | 'new' | null>(null);
-  /** 展开热度走势的人物 id */
   const [heatOf, setHeatOf] = useState<number | null>(null);
   const [heat, setHeat] = useState<CharacterHeat | null>(null);
+
+  // 搜索 / 排序 / 筛选
+  const [search, setSearch] = useState('');
+  const [sortMode, setSortMode] = useState<SortMode>('importance');
+  const [roleFilter, setRoleFilter] = useState<string>('');
+  const [aliveFilter, setAliveFilter] = useState<AliveFilter>('all');
+  const [povFilter, setPovFilter] = useState<PovFilter>('all');
+  // 自定义拖拽排序
+  const [dragId, setDragId] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -406,7 +493,6 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
     void refresh();
   }, [refresh]);
 
-  // 热度走势：展开时按需拉取
   useEffect(() => {
     if (heatOf === null) {
       setHeat(null);
@@ -429,14 +515,22 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
     role: string;
     notes: string;
     excludeWords: string[];
+    meta: CharacterMeta;
   }) => {
     setBusy(true);
     try {
       if (editing === 'new') {
-        await api.addCharacter(v.name, v.aliases, v.role, v.notes, v.excludeWords);
+        await api.addCharacter(v.name, v.aliases, v.role, v.notes, v.excludeWords, v.meta);
         showToast(`人物「${v.name}」已创建`);
       } else if (typeof editing === 'number') {
-        await api.updateCharacter(editing, v);
+        await api.updateCharacter(editing, {
+          name: v.name,
+          aliases: v.aliases,
+          role: v.role,
+          notes: v.notes,
+          excludeWords: v.excludeWords,
+          meta: v.meta,
+        });
         showToast('已保存');
       }
       setEditing(null);
@@ -505,13 +599,79 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
     window.dispatchEvent(new CustomEvent('nf:open-name-generator'));
   };
 
-  const list = useMemo(
-    () => (tab === 'characters' ? characters : locations),
-    [tab, characters, locations],
-  );
+  // 筛选 + 排序后的人物列表
+  const filteredCharacters = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = characters.filter((c) => {
+      if (q) {
+        const hay = `${c.name} ${c.aliases.join(' ')} ${c.faction} ${c.tags.join(' ')}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (roleFilter && c.role !== roleFilter) return false;
+      if (aliveFilter === 'alive' && c.alive !== true) return false;
+      if (aliveFilter === 'dead' && c.alive !== false) return false;
+      if (povFilter === 'pov' && !c.isPov) return false;
+      if (povFilter === 'nonpov' && c.isPov) return false;
+      return true;
+    });
+    switch (sortMode) {
+      case 'name':
+        list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+        break;
+      case 'importance':
+        list = [...list].sort((a, b) => b.importance - a.importance || a.name.localeCompare(b.name, 'zh-Hans-CN'));
+        break;
+      case 'mentions':
+        list = [...list].sort((a, b) => b.totalMentions - a.totalMentions || a.name.localeCompare(b.name, 'zh-Hans-CN'));
+        break;
+      case 'role':
+        list = [...list].sort(
+          (a, b) => (ROLE_ORDER[a.role] ?? 4) - (ROLE_ORDER[b.role] ?? 4) || a.name.localeCompare(b.name, 'zh-Hans-CN'),
+        );
+        break;
+      case 'custom':
+        list = [...list].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+        break;
+    }
+    return list;
+  }, [characters, search, roleFilter, aliveFilter, povFilter, sortMode]);
+
+  // 自定义拖拽：放下后重排并落库
+  const handleDrop = async (targetId: number) => {
+    if (dragId === null || dragId === targetId) {
+      setDragId(null);
+      return;
+    }
+    const ids = filteredCharacters.map((c) => c.id);
+    const from = ids.indexOf(dragId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) {
+      setDragId(null);
+      return;
+    }
+    const newIds = [...ids];
+    newIds.splice(from, 1);
+    newIds.splice(to, 0, dragId);
+    const orders: [number, number][] = newIds.map((id, i) => [id, i]);
+    // 乐观更新
+    setCharacters((prev) => {
+      const orderMap = new Map(orders);
+      return prev.map((c) => ({ ...c, sortOrder: orderMap.get(c.id) ?? c.sortOrder }));
+    });
+    setDragId(null);
+    try {
+      await api.reorderCharacters(orders);
+      notify();
+    } catch (e) {
+      showToast(String(e), 'error');
+      await refresh();
+    }
+  };
+
+  const hasActiveFilter = search !== '' || roleFilter !== '' || aliveFilter !== 'all' || povFilter !== 'all';
 
   return (
-    <Modal title="人物 / 地点" onClose={onClose} width={760}>
+    <Modal title="人物 / 地点" onClose={onClose} width={800}>
       <div className="cards-toolbar">
         <div className="tabs">
           <button
@@ -559,6 +719,78 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
+      {tab === 'characters' && (
+        <div className="cards-filter-bar">
+          <div className="cards-search">
+            <IconSearch size={14} />
+            <input
+              className="input"
+              placeholder="搜索名字 / 别名 / 阵营 / 标签…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <select
+            className="select select-mini cards-sort"
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
+            title="排序方式"
+          >
+            <option value="importance">按重要度</option>
+            <option value="name">按名字</option>
+            <option value="mentions">按出场次数</option>
+            <option value="role">按角色定位</option>
+            <option value="custom">自定义拖拽</option>
+          </select>
+          <div className="cards-filter-chips">
+            {['', '主角', '配角', '反派', '龙套'].map((r) => (
+              <button
+                key={r || 'all'}
+                className={`chip${roleFilter === r ? ' active' : ''}`}
+                onClick={() => setRoleFilter(r)}
+              >
+                {r || '全部'}
+              </button>
+            ))}
+          </div>
+          <div className="cards-filter-chips">
+            {(['all', 'alive', 'dead'] as AliveFilter[]).map((f) => (
+              <button
+                key={f}
+                className={`chip${aliveFilter === f ? ' active' : ''}`}
+                onClick={() => setAliveFilter(f)}
+              >
+                {f === 'all' ? '存亡' : f === 'alive' ? '存活' : '死亡'}
+              </button>
+            ))}
+          </div>
+          <div className="cards-filter-chips">
+            {(['all', 'pov', 'nonpov'] as PovFilter[]).map((f) => (
+              <button
+                key={f}
+                className={`chip${povFilter === f ? ' active' : ''}`}
+                onClick={() => setPovFilter(f)}
+              >
+                {f === 'all' ? 'POV' : f === 'pov' ? '是POV' : '非POV'}
+              </button>
+            ))}
+          </div>
+          {hasActiveFilter && (
+            <button
+              className="btn btn-ghost btn-mini"
+              onClick={() => {
+                setSearch('');
+                setRoleFilter('');
+                setAliveFilter('all');
+                setPovFilter('all');
+              }}
+            >
+              清除筛选
+            </button>
+          )}
+        </div>
+      )}
+
       {editing === 'new' &&
         (tab === 'characters' ? (
           <CharacterForm onSubmit={(v) => void submitCharacter(v)} onCancel={() => setEditing(null)} busy={busy} />
@@ -566,38 +798,59 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
           <LocationForm onSubmit={(v) => void submitLocation(v)} onCancel={() => setEditing(null)} busy={busy} />
         ))}
 
-      {list.length === 0 && editing !== 'new' ? (
+      {tab === 'characters' && filteredCharacters.length === 0 && editing !== 'new' ? (
         <div className="cards-empty">
-          <p>
-            {tab === 'characters'
-              ? '还没有人物卡。点击「新建人物」，为你的主角建第一张卡。'
-              : '还没有地点卡。点击「新建地点」，记录故事发生的舞台。'}
-          </p>
+          <p>{hasActiveFilter ? '没有符合筛选条件的人物。' : '还没有人物卡。点击「新建人物」，为你的主角建第一张卡。'}</p>
           <p className="cards-empty-sub">
             建卡后自动统计全书出场次数、覆盖章节与断档情况——精确匹配，零误判。
           </p>
         </div>
+      ) : tab === 'locations' && locations.length === 0 && editing !== 'new' ? (
+        <div className="cards-empty">
+          <p>还没有地点卡。点击「新建地点」，记录故事发生的舞台。</p>
+        </div>
       ) : (
         <ul className="cards-list">
           {tab === 'characters'
-            ? characters.map((c) => (
-                <li key={c.id} className="card-item">
-                  <button
-                    className="card-head"
-                    onClick={() => {
-                      setEditing(editing === c.id ? null : c.id);
-                      setHeatOf(heatOf === c.id ? null : c.id);
-                    }}
-                  >
-                    <span className="card-name">{c.name}</span>
-                    {c.role && <span className="badge-role">{c.role}</span>}
-                    {c.aliases.length > 0 && (
-                      <span className="card-aliases">{c.aliases.join('、')}</span>
+            ? filteredCharacters.map((c) => (
+                <li
+                  key={c.id}
+                  className={`card-item${dragId === c.id ? ' card-item-dragging' : ''}`}
+                  draggable={sortMode === 'custom'}
+                  onDragStart={() => setDragId(c.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => void handleDrop(c.id)}
+                  onDragEnd={() => setDragId(null)}
+                >
+                  <div className="card-item-head">
+                    {sortMode === 'custom' && (
+                      <span className="card-drag-handle" title="拖拽排序">
+                        <IconGripVertical size={14} />
+                      </span>
                     )}
-                    <span className="card-stats">
-                      {fmt(c.totalMentions)} 次 · {c.chapterCount} 章
-                    </span>
-                  </button>
+                    <button
+                      className="card-head"
+                      onClick={() => {
+                        setEditing(editing === c.id ? null : c.id);
+                        setHeatOf(heatOf === c.id ? null : c.id);
+                      }}
+                    >
+                      <span className="card-name">{c.name}</span>
+                      {c.role && <span className="badge-role">{c.role}</span>}
+                      {c.faction && <span className="badge-faction">{c.faction}</span>}
+                      {c.isPov && <span className="badge-pov">POV</span>}
+                      {c.alive === false && <span className="badge-dead">已故</span>}
+                      {c.tags.length > 0 && c.tags.slice(0, 2).map((t) => (
+                        <span key={t} className="badge-tag">{t}</span>
+                      ))}
+                      {c.aliases.length > 0 && (
+                        <span className="card-aliases">{c.aliases.join('、')}</span>
+                      )}
+                      <span className="card-stats">
+                        {fmt(c.totalMentions)} 次 · {c.chapterCount} 章
+                      </span>
+                    </button>
+                  </div>
                   <div className="card-sub">
                     {c.firstChapterTitle ? (
                       <span>

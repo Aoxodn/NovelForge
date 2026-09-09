@@ -242,6 +242,8 @@ pub struct CharacterProfile {
     pub tags: Vec<String>,
     /// 自定义字段（键值对，作者按需扩展，不预设固定结构）
     pub custom_fields: serde_json::Value,
+    /// 自定义排序序号（作者手动拖拽排序，0 = 未设置）
+    pub sort_order: i64,
 }
 
 /// 人物出现热度（文档三十一节）：按全书章节顺序的出现次数序列

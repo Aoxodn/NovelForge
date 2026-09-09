@@ -239,6 +239,10 @@ export const updateCharacter = (
 export const deleteCharacter = (characterId: number) =>
   cmd<void>('delete_character', { characterId });
 
+/** 批量更新人物自定义排序（[(id, sortOrder), ...]，单事务） */
+export const reorderCharacters = (orders: [number, number][]) =>
+  cmd<void>('reorder_characters', { orders });
+
 /** 人物热度：按全书章节顺序的出现次数 + 断档预警 */
 export const getCharacterHeat = (characterId: number) =>
   cmd<CharacterHeat>('get_character_heat', { characterId });

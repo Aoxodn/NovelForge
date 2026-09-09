@@ -95,6 +95,7 @@ pub fn run() {
             commands::cards::add_character,
             commands::cards::update_character,
             commands::cards::delete_character,
+            commands::cards::reorder_characters,
             commands::cards::get_character_heat,
             commands::cards::list_locations,
             commands::cards::add_location,
