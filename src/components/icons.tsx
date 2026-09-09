@@ -109,6 +109,14 @@ export const IconGripVertical = ({ size = 16 }: P) => (
   </svg>
 );
 
+export const IconExternalLink = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <path d="M14 4h6v6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M20 4L11 13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
 export const IconShield = ({ size = 16 }: P) => (
   <svg {...base(size)}>
     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />

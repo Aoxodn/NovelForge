@@ -4461,6 +4461,18 @@ select option,
 .char-custom-val {
   flex: 1;
 }
+.char-heat-section,
+.char-relations-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.char-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
 @media (max-width: 900px) {
   .char-meta-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

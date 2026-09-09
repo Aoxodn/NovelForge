@@ -4,15 +4,19 @@ import {
   addCharacter,
   deleteCharacter,
   getAliasConflicts,
+  getCharacterHeat,
+  listAllCharacterRelations,
   listCharacters,
   updateCharacter,
   type AliasConflict,
 } from '../api';
-import type { CharacterMeta, CharacterProfile } from '../types/models';
+import type { CharacterHeat, CharacterMeta, CharacterProfile, CharacterRelation } from '../types/models';
 import { roleColor } from './canvas/routing';
 import { useDurableDraft } from '../hooks/useDurableDraft';
 import { RenameCharacterModal } from './tools/RenameCharacterModal';
 import { CharacterArcModal } from './tools/CharacterArcModal';
+import { HeatBars } from './character/HeatBars';
+import { RelationsSection } from './character/RelationsSection';
 
 const ROLE_OPTIONS = ['主角', '配角', '反派', '龙套'];
 const FILTER_OPTIONS = ['全部', ...ROLE_OPTIONS];
@@ -64,6 +68,8 @@ export function CharacterCardView() {
   const [conflicts, setConflicts] = useState<AliasConflict[]>([]);
   const [showRename, setShowRename] = useState(false);
   const [showArc, setShowArc] = useState(false);
+  const [heat, setHeat] = useState<CharacterHeat | null>(null);
+  const [relations, setRelations] = useState<CharacterRelation[]>([]);
 
   // 虚拟列表窗口
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -94,6 +100,19 @@ export function CharacterCardView() {
     () => chars.find((c) => c.id === selectedId) ?? null,
     [chars, selectedId],
   );
+
+  // 选中角色变化时加载热度走势
+  useEffect(() => {
+    if (selectedId === null) {
+      setHeat(null);
+      return;
+    }
+    let cancelled = false;
+    getCharacterHeat(selectedId).then((h) => {
+      if (!cancelled) setHeat(h);
+    }).catch(() => { if (!cancelled) setHeat(null); });
+    return () => { cancelled = true; };
+  }, [selectedId]);
 
   // 可靠草稿：切换角色前自动 flush 上一角色，保存失败显示持久错误条
   const { draft, setDraft, saving, error, reset, retry } = useDurableDraft<CharDraft>(
@@ -138,9 +157,10 @@ export function CharacterCardView() {
   const load = async () => {
     setLoading(true);
     try {
-      const [list, cf] = await Promise.all([listCharacters(), getAliasConflicts()]);
+      const [list, cf, rels] = await Promise.all([listCharacters(), getAliasConflicts(), listAllCharacterRelations()]);
       setChars(list);
       setConflicts(cf);
+      setRelations(rels);
       if (list.length > 0 && selectedId === null) {
         setSelectedId(list[0].id);
       }
@@ -506,6 +526,31 @@ export function CharacterCardView() {
                 </div>
               ))}
             </div>
+
+            {/* 热度走势 */}
+            <div className="char-heat-section">
+              <div className="char-section-title">出场热度</div>
+              {heat ? (
+                <HeatBars heat={heat} />
+              ) : (
+                <p className="heat-sub">加载中…</p>
+              )}
+            </div>
+
+            {/* 人物关系 */}
+            {selected && (
+              <div className="char-relations-section">
+                <div className="char-section-title">人物关系</div>
+                <RelationsSection
+                  characterId={selected.id}
+                  characters={chars}
+                  relations={relations}
+                  onChanged={async () => {
+                    setRelations(await listAllCharacterRelations());
+                  }}
+                />
+              </div>
+            )}
 
             <div className="char-actions">
               <button className="btn btn-ghost" onClick={() => setViewMode('map')}>
