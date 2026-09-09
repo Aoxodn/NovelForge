@@ -5,12 +5,13 @@
  * - 深度编辑（人设、关系、热度、改名、弧光）统一收口到角色卡页
  * - CharacterForm 仍导出，供故事地图 / 卷画布的「编辑人物」弹窗复用
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../api';
 import { useAppStore } from '../store/appStore';
 import { Modal } from './Modal';
 import { IconDice, IconMapPin, IconPlus, IconRefresh, IconTrash, IconUsers, IconGripVertical, IconSearch, IconExternalLink } from './icons';
 import { fmt } from '../utils/text';
+import { nextCharacterName } from '../utils/characterName';
 import type { CharacterMeta, CharacterProfile, LocationProfile } from '../types/models';
 
 const ROLES = ['', '主角', '配角', '反派', '龙套'];
@@ -182,6 +183,8 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
   const [locations, setLocations] = useState<LocationProfile[]>([]);
   const [busy, setBusy] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
   const [editingLocation, setEditingLocation] = useState<number | null>(null);
 
   // 搜索 / 排序 / 筛选
@@ -345,17 +348,24 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
               <IconRefresh size={14} /> {rebuilding ? '重建中…' : '重建统计'}
             </button>
           )}
-          <button className="btn btn-primary" onClick={() => {
+          <button className="btn btn-primary" disabled={creating} onClick={() => {
             if (tab === 'characters') {
+              if (creatingRef.current) return;
+              creatingRef.current = true;
+              setCreating(true);
               void (async () => {
                 try {
-                  const c = await api.addCharacter('新角色', [], '配角', '');
+                  const latest = await api.listCharacters();
+                  const c = await api.addCharacter(nextCharacterName(latest), [], '配角', '');
                   await refresh();
                   notify();
                   focusCharacter(c.id);
                   onClose();
                 } catch (e) {
                   showToast(String(e), 'error');
+                } finally {
+                  creatingRef.current = false;
+                  setCreating(false);
                 }
               })();
             } else {

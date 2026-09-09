@@ -7,7 +7,7 @@
  *   Windows → bundle/nsis/*-setup.exe（或 msi）
  *   macOS   → bundle/macos/*.dmg
  *   Linux   → bundle/{deb,appimage}/*
- * 可用 `npm run dist -- --target nsis` 覆盖目标。
+ * 可用 `npm run dist -- --bundles nsis` 覆盖安装包格式。
  */
 import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
-// 允许命令行透传 --target
+// 允许把 Tauri CLI 的打包参数（例如 --bundles nsis）原样透传。
 const passthrough = process.argv.slice(2).join(' ');
 
 console.log(`▶ 打包 NovelForge v${version}（平台：${process.platform}，首次较慢）...`);

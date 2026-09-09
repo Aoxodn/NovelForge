@@ -1,5 +1,35 @@
 # NovelForge 更新日志（CHANGELOG）
 
+## [1.0.1] - 2026-09-09
+
+### 新增
+
+- **书名可修改**：顶栏书名点击即可编辑，Enter 保存 / Escape 取消，同步更新项目信息、标识文件和最近项目列表
+- 角色卡页分「人设 / 剧情」双 tab，剧情 tab 集中展示出场热度走势与人物关系管理
+- 顶栏主题三色循环切换（深色 / 浅色 / 护眼）
+- 字数动画（useCountUp）
+
+### 重构
+
+- CSS 模块化拆分：characters.css / dashboard.css / workspace.css 从 global.css 独立
+- ChapterTree 键盘无障碍支持（Enter/Space 激活），卷拖拽索引计算修复
+- TopBar / useDurableDraft / editorStore / Modal / RelationsSection / InfoPanel / ProjectView / ChapterEditor 全面重构
+- 角色新建使用唯一名称生成（新角色 / 新角色 2 / …）
+
+### 测试
+
+- 前端测试从 15 个扩充至 47 个，新增 characterName / useDurableDraft / ChapterTree / CharacterCardView 测试
+- 新增 Playwright 视觉回归脚本（角色页 / 首页 / 主界面，多分辨率多主题）
+- jsdom 支持 DOM 级测试
+
+### 修复
+
+- 卷拖拽排序索引计算错误（源卷在目标前时偏移）
+- 新建角色存亡默认值错误（曾默认「死亡」，现默认「未知」）
+- 角色卡页缺少显式保存按钮（新增保存按钮 + 状态指示）
+
+---
+
 ## [1.1.4] - 2026-09-09
 
 ### 修复

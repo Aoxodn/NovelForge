@@ -9,14 +9,14 @@
  * - 专注模式（0.7.1 重做）：打字机滚动 + 当前段高亮、其余淡化
  *   （textarea 文字透明，底层镜像层负责渲染与光标定位测量）
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { writeText as writeClipboard } from '@tauri-apps/plugin-clipboard-manager';
-import { splitActiveParagraph } from '../utils/paragraphs';
-import { useAppStore } from '../store/appStore';
-import { useEditorStore } from '../store/editorStore';
-import { useAutoSave } from '../hooks/useAutoSave';
-import { countParagraphs, countText, fmt, readingMinutes } from '../utils/text';
-import { IconCopyChapter } from './icons';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { writeText as writeClipboard } from "@tauri-apps/plugin-clipboard-manager";
+import { splitActiveParagraph } from "../utils/paragraphs";
+import { useAppStore } from "../store/appStore";
+import { useEditorStore } from "../store/editorStore";
+import { useAutoSave } from "../hooks/useAutoSave";
+import { countParagraphs, countText, fmt, readingMinutes } from "../utils/text";
+import { IconCopyChapter } from "./icons";
 
 /** 写入剪贴板；非 Tauri 环境（浏览器预览）回退到 Web Clipboard API */
 async function copyToClipboard(text: string): Promise<void> {
@@ -59,20 +59,22 @@ export function ChapterEditor() {
   const copyChapter = async (indent: boolean) => {
     setCopyMenuOpen(false);
     const text = content
-      .split('\n')
+      .split("\n")
       .map((l) => l.trim())
       .filter((l) => l.length > 0)
       .map((l) => (indent ? `　　${l}` : l))
-      .join('\n');
+      .join("\n");
     if (!text) {
-      useAppStore.getState().showToast('本章还没有正文可复制');
+      useAppStore.getState().showToast("本章还没有正文可复制");
       return;
     }
     try {
       await copyToClipboard(text);
-      useAppStore.getState().showToast(`已复制本章正文（${indent ? '段首缩进' : '无缩进'}）`);
+      useAppStore
+        .getState()
+        .showToast(`已复制本章正文（${indent ? "段首缩进" : "无缩进"}）`);
     } catch {
-      useAppStore.getState().showToast('复制失败，请重试', 'error');
+      useAppStore.getState().showToast("复制失败，请重试", "error");
     }
   };
 
@@ -80,10 +82,11 @@ export function ChapterEditor() {
   useEffect(() => {
     if (!copyMenuOpen) return;
     const h = (e: MouseEvent) => {
-      if (!copyWrapRef.current?.contains(e.target as Node)) setCopyMenuOpen(false);
+      if (!copyWrapRef.current?.contains(e.target as Node))
+        setCopyMenuOpen(false);
     };
-    window.addEventListener('mousedown', h);
-    return () => window.removeEventListener('mousedown', h);
+    window.addEventListener("mousedown", h);
+    return () => window.removeEventListener("mousedown", h);
   }, [copyMenuOpen]);
 
   // 切换章节时滚动条回到顶部（DOM 复用会保留上一章的滚动位置）
@@ -104,8 +107,10 @@ export function ChapterEditor() {
 
   // 当前章所在卷名
   const volumeTitle = useMemo(() => {
-    const v = tree.volumes.find((x) => x.id === useEditorStore.getState().volumeId);
-    return v?.title ?? '';
+    const v = tree.volumes.find(
+      (x) => x.id === useEditorStore.getState().volumeId,
+    );
+    return v?.title ?? "";
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapterId, tree]);
 
@@ -136,7 +141,7 @@ export function ChapterEditor() {
           </span>,
         );
       }
-      if (i < paras.length - 1) nodes.push('\n');
+      if (i < paras.length - 1) nodes.push("\n");
     }
     return nodes;
   }, [paras, activeIdx, caretOff]);
@@ -151,8 +156,8 @@ export function ChapterEditor() {
     const ta = textareaRef.current;
     if (!mirror || !ta) return;
     mirror.style.width = `${ta.clientWidth}px`; // clientWidth 已扣除滚动条
-    mirror.style.left = '0';
-    mirror.style.right = 'auto';
+    mirror.style.left = "0";
+    mirror.style.right = "auto";
   };
 
   const syncMirror = () => {
@@ -182,7 +187,7 @@ export function ChapterEditor() {
     const ta = textareaRef.current;
     const mirror = mirrorRef.current;
     if (!ta || !mirror) return;
-    const probe = mirror.querySelector<HTMLElement>('.caret-probe');
+    const probe = mirror.querySelector<HTMLElement>(".caret-probe");
     if (probe) {
       const target = Math.max(
         0,
@@ -200,8 +205,34 @@ export function ChapterEditor() {
     return (
       <section className="editor">
         <div className="editor-empty">
-          <div className="editor-empty-icon">✍</div>
-          <p>{tree.chapters.length === 0 ? '从左侧或 Ctrl+N 新建第一章，开始创作' : '在左侧目录中选择一章开始写作'}</p>
+          <span className="editor-empty-eyebrow">
+            {tree.chapters.length === 0 ? "你的故事从这里开始" : "继续创作"}
+          </span>
+          <h1>
+            {tree.chapters.length === 0
+              ? "写下第一章。"
+              : "选择一章，继续故事。"}
+          </h1>
+          <p>
+            {tree.chapters.length === 0
+              ? "创建章节后即可开始写作，内容会在本地自动保存。"
+              : "从左侧目录选择章节，或创建一个新的章节。"}
+          </p>
+          <button
+            className="editor-empty-action"
+            disabled={tree.volumes.length === 0}
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent("nf:new-chapter"))
+            }
+          >
+            {tree.chapters.length === 0 ? "创建第一章" : "新建章节"}{" "}
+            <span aria-hidden="true">›</span>
+          </button>
+          {tree.volumes.length === 0 ? (
+            <small>请先在左侧“＋”中新建分卷</small>
+          ) : (
+            <small>快捷键 Ctrl + N</small>
+          )}
         </div>
       </section>
     );
@@ -209,18 +240,18 @@ export function ChapterEditor() {
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Ctrl+S：手动保存并创建快照
-    if (e.ctrlKey && e.key.toLowerCase() === 's') {
+    if (e.ctrlKey && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void save(true);
       return;
     }
     // Tab：插入两个全角空格（中文段首缩进习惯）
-    if (e.key === 'Tab') {
+    if (e.key === "Tab") {
       e.preventDefault();
       const el = e.currentTarget;
       const start = el.selectionStart;
       const end = el.selectionEnd;
-      const next = content.slice(0, start) + '　　' + content.slice(end);
+      const next = content.slice(0, start) + "　　" + content.slice(end);
       setContent(next);
       // 下一帧恢复光标位置
       requestAnimationFrame(() => {
@@ -248,14 +279,14 @@ export function ChapterEditor() {
         />
         <div className="editor-header-meta">
           {volumeTitle && <span className="editor-volume">{volumeTitle}</span>}
-          <span className={`save-state${saveError ? ' error' : ''}`}>
+          <span className={`save-state${saveError ? " error" : ""}`}>
             {saveError
               ? `保存失败：${saveError}`
               : saving
-                ? '保存中…'
+                ? "保存中…"
                 : dirty
-                  ? '未保存（自动保存中）'
-                  : '已保存'}
+                  ? "未保存（自动保存中）"
+                  : "已保存"}
           </span>
           <div className="copy-menu-wrap" ref={copyWrapRef}>
             <button
@@ -267,10 +298,16 @@ export function ChapterEditor() {
             </button>
             {copyMenuOpen && (
               <div className="copy-menu">
-                <button className="menu-item" onClick={() => void copyChapter(true)}>
+                <button
+                  className="menu-item"
+                  onClick={() => void copyChapter(true)}
+                >
                   段首缩进（贴文标准）
                 </button>
-                <button className="menu-item" onClick={() => void copyChapter(false)}>
+                <button
+                  className="menu-item"
+                  onClick={() => void copyChapter(false)}
+                >
                   无缩进（原文）
                 </button>
               </div>
@@ -281,9 +318,14 @@ export function ChapterEditor() {
 
       <div className="editor-scroll" ref={scrollRef}>
         <div className="editor-page">
-          <div className={`editor-text-wrap${focusMode ? ' focus' : ''}`}>
+          <div className={`editor-text-wrap${focusMode ? " focus" : ""}`}>
             {focusMode && (
-              <div className="editor-mirror" ref={mirrorRef} aria-hidden style={fontStyles}>
+              <div
+                className="editor-mirror"
+                ref={mirrorRef}
+                aria-hidden
+                style={fontStyles}
+              >
                 <div className="editor-mirror-inner">{mirrorNodes}</div>
               </div>
             )}

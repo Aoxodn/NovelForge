@@ -190,6 +190,84 @@ pub fn update_project_outline(state: State<'_, AppState>, outline: String) -> Re
     })
 }
 
+/// 更新项目信息：书名 / 作者 / 简介。
+///
+/// 同步更新三处：project_info 表、project.novel 标识文件、全局 recent_projects 表。
+/// 不改动项目目录名（目录名在创建时确定，避免移动文件带来的风险）。
+#[tauri::command]
+pub fn update_project_info(
+    state: State<'_, AppState>,
+    name: Option<String>,
+    author: Option<String>,
+    description: Option<String>,
+) -> Result<ProjectTree> {
+    let name = name.map(|s| s.trim().to_string());
+    if let Some(ref n) = name {
+        if n.is_empty() {
+            return Err(AppError::Msg("书名不能为空".into()));
+        }
+    }
+
+    let tree = state.with_project(|db| {
+        // 组装动态 UPDATE
+        let mut sets: Vec<String> = Vec::new();
+        let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(ref n) = name {
+            sets.push("name = ?".into());
+            values.push(Box::new(n.clone()));
+        }
+        if let Some(ref a) = author {
+            sets.push("author = ?".into());
+            values.push(Box::new(a.trim().to_string()));
+        }
+        if let Some(ref d) = description {
+            sets.push("description = ?".into());
+            values.push(Box::new(d.trim().to_string()));
+        }
+        if sets.is_empty() {
+            return db::project::build_project_tree(&db.conn, &db.dir);
+        }
+        sets.push("updated_at = datetime('now','localtime')".into());
+        let sql = format!(
+            "UPDATE project_info SET {} WHERE id = 1",
+            sets.join(", ")
+        );
+        db.conn.execute(&sql, rusqlite::params_from_iter(values.iter()))?;
+
+        // 同步更新 project.novel 标识文件中的 name
+        if name.is_some() {
+            let marker_path = db.dir.join("project.novel");
+            if let Ok(content) = std::fs::read_to_string(&marker_path) {
+                if let Ok(mut marker) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(obj) = marker.as_object_mut() {
+                        obj.insert("name".into(), serde_json::Value::String(name.clone().unwrap()));
+                        if let Ok(written) = serde_json::to_string_pretty(&marker) {
+                            let _ = std::fs::write(&marker_path, written);
+                        }
+                    }
+                }
+            }
+        }
+
+        db::project::build_project_tree(&db.conn, &db.dir)
+    })?;
+
+    // 同步更新全局 recent_projects 表中的书名（按项目目录匹配）
+    if let Some(ref n) = name {
+        let project_dir = state.with_project(|db| Ok(db.dir.clone()))?;
+        let path_str = project_dir.to_string_lossy().to_string();
+        let _ = state.with_global(|conn| {
+            conn.execute(
+                "UPDATE recent_projects SET name = ?1 WHERE path = ?2",
+                params![n, path_str],
+            )?;
+            Ok(())
+        });
+    }
+
+    Ok(tree)
+}
+
 /// 最近打开的项目列表
 #[tauri::command]
 pub fn list_recent_projects(state: State<'_, AppState>) -> Result<Vec<RecentProject>> {

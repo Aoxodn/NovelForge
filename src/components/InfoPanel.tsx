@@ -7,23 +7,27 @@
  * - 本章发展卡（V6：故事图单章上下文——上下游 / 伏笔 / 弧线）
  * - 版本历史卡（chapter_versions 快照浏览与恢复）
  */
-import { useCallback, useEffect, useState } from 'react';
-import * as api from '../api';
-import { useAppStore } from '../store/appStore';
-import { useEditorStore } from '../store/editorStore';
-import { useCountUp } from '../hooks/useCountUp';
-import { useDurableDraft } from '../hooks/useDurableDraft';
-import type { ChapterPresenceView, ChapterStoryContext, ChapterVersionMeta } from '../types/models';
-import { fmt } from '../utils/text';
-import { countParagraphs, readingMinutes } from '../utils/text';
-import { IconClock, IconRefresh } from './icons';
-import { OutlineModal } from './OutlineModal';
+import { useCallback, useEffect, useRef, useState } from "react";
+import * as api from "../api";
+import { useAppStore } from "../store/appStore";
+import { useEditorStore } from "../store/editorStore";
+import { useCountUp } from "../hooks/useCountUp";
+import { useDurableDraft } from "../hooks/useDurableDraft";
+import type {
+  ChapterPresenceView,
+  ChapterStoryContext,
+  ChapterVersionMeta,
+} from "../types/models";
+import { fmt } from "../utils/text";
+import { countParagraphs, readingMinutes } from "../utils/text";
+import { IconClock, IconRefresh } from "./icons";
+import { OutlineModal } from "./OutlineModal";
 
-type OutlineSaveState = 'idle' | 'saving' | 'saved' | 'error';
+type OutlineSaveState = "idle" | "saving" | "saved" | "error";
 
 /** 连线类型名（本章发展卡 / 图例共用口径） */
 const edgeTypeName = (t: number) =>
-  ['顺序', '因果', '分支', '汇合', '伏笔'][t] ?? '连线';
+  ["顺序", "因果", "分支", "汇合", "伏笔"][t] ?? "连线";
 
 export function InfoPanel() {
   const tree = useAppStore((s) => s.tree)!;
@@ -42,6 +46,10 @@ export function InfoPanel() {
   const [restoring, setRestoring] = useState(false);
   const [presence, setPresence] = useState<ChapterPresenceView | null>(null);
   const [storyCtx, setStoryCtx] = useState<ChapterStoryContext | null>(null);
+  // 每类异步资料各自维护请求序号。切章或重复刷新时，迟到响应只能更新最新请求。
+  const versionsRequest = useRef(0);
+  const presenceRequest = useRef(0);
+  const storyRequest = useRef(0);
   const [showProjectOutline, setShowProjectOutline] = useState(false);
   const focusMapNode = useAppStore((s) => s.focusMapNode);
   const setViewMode = useAppStore((s) => s.setViewMode);
@@ -52,7 +60,7 @@ export function InfoPanel() {
     const ok = await useEditorStore.getState().loadChapter(id);
     if (!ok) return;
     selectChapter(id);
-    setViewMode('editor');
+    setViewMode("editor");
   };
 
   /** 伏笔跳转：章级锚点 → 打开对端章正文；卷级 → 地图定位对端卷 */
@@ -71,7 +79,7 @@ export function InfoPanel() {
     dirty: outlineDirty,
   } = useDurableDraft<{ summary: string; notes: string }>(
     chapterId,
-    { summary: '', notes: '' },
+    { summary: "", notes: "" },
     async (id, d) => {
       await api.setChapterOutline(id, d.summary, d.notes);
     },
@@ -98,34 +106,60 @@ export function InfoPanel() {
   const editChSummary = (v: string) => setOutlineDraft({ summary: v });
   const editChNotes = (v: string) => setOutlineDraft({ notes: v });
   const outlineState: OutlineSaveState = outlineError
-    ? 'error'
+    ? "error"
     : outlineSaving
-      ? 'saving'
+      ? "saving"
       : outlineDirty
-        ? 'idle'
-        : 'saved';
+        ? "idle"
+        : "saved";
 
   const refreshVersions = useCallback(async () => {
+    const request = ++versionsRequest.current;
+    const requestedChapterId = chapterId;
     if (chapterId === null) {
       setVersions([]);
       return;
     }
     try {
-      setVersions(await api.listChapterVersions(chapterId));
+      const result = await api.listChapterVersions(chapterId);
+      if (
+        request === versionsRequest.current &&
+        useEditorStore.getState().chapterId === requestedChapterId
+      ) {
+        setVersions(result);
+      }
     } catch {
-      setVersions([]);
+      if (
+        request === versionsRequest.current &&
+        useEditorStore.getState().chapterId === requestedChapterId
+      ) {
+        setVersions([]);
+      }
     }
   }, [chapterId]);
 
   const refreshPresence = useCallback(async () => {
+    const request = ++presenceRequest.current;
+    const requestedChapterId = chapterId;
     if (chapterId === null) {
       setPresence(null);
       return;
     }
     try {
-      setPresence(await api.getChapterPresence(chapterId));
+      const result = await api.getChapterPresence(chapterId);
+      if (
+        request === presenceRequest.current &&
+        useEditorStore.getState().chapterId === requestedChapterId
+      ) {
+        setPresence(result);
+      }
     } catch {
-      setPresence(null);
+      if (
+        request === presenceRequest.current &&
+        useEditorStore.getState().chapterId === requestedChapterId
+      ) {
+        setPresence(null);
+      }
     }
   }, [chapterId]);
 
@@ -136,8 +170,8 @@ export function InfoPanel() {
   // 卡片变更（建卡 / 重建统计）后刷新本章出场
   useEffect(() => {
     const h = () => void refreshPresence();
-    window.addEventListener('nf:cards-updated', h);
-    return () => window.removeEventListener('nf:cards-updated', h);
+    window.addEventListener("nf:cards-updated", h);
+    return () => window.removeEventListener("nf:cards-updated", h);
   }, [refreshPresence]);
 
   useEffect(() => {
@@ -146,14 +180,27 @@ export function InfoPanel() {
 
   // ---------- 本章发展：单章故事上下文（上游 / 下游 / 伏笔 / 弧线） ----------
   const refreshStoryCtx = useCallback(async () => {
+    const request = ++storyRequest.current;
+    const requestedChapterId = chapterId;
     if (chapterId === null) {
       setStoryCtx(null);
       return;
     }
     try {
-      setStoryCtx(await api.getChapterStoryContext(chapterId));
+      const result = await api.getChapterStoryContext(chapterId);
+      if (
+        request === storyRequest.current &&
+        useEditorStore.getState().chapterId === requestedChapterId
+      ) {
+        setStoryCtx(result);
+      }
     } catch {
-      setStoryCtx(null);
+      if (
+        request === storyRequest.current &&
+        useEditorStore.getState().chapterId === requestedChapterId
+      ) {
+        setStoryCtx(null);
+      }
     }
   }, [chapterId]);
 
@@ -164,13 +211,15 @@ export function InfoPanel() {
   // 地图 / 总览改动 → 同步刷新本章发展
   useEffect(() => {
     const h = () => void refreshStoryCtx();
-    window.addEventListener('nf:story-updated', h);
-    return () => window.removeEventListener('nf:story-updated', h);
+    window.addEventListener("nf:story-updated", h);
+    return () => window.removeEventListener("nf:story-updated", h);
   }, [refreshStoryCtx]);
 
   const restore = async (versionId: number) => {
     if (chapterId === null || restoring) return;
-    const ok = window.confirm('恢复到该历史版本？\n\n当前内容会先自动备份为一条新版本记录。');
+    const ok = window.confirm(
+      "恢复到该历史版本？\n\n当前内容会先自动备份为一条新版本记录。",
+    );
     if (!ok) return;
     setRestoring(true);
     try {
@@ -178,9 +227,9 @@ export function InfoPanel() {
       await useEditorStore.getState().loadChapter(chapterId, true);
       await refreshVersions();
       await refreshTree();
-      showToast('已恢复到历史版本');
+      showToast("已恢复到历史版本");
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     } finally {
       setRestoring(false);
     }
@@ -195,6 +244,10 @@ export function InfoPanel() {
 
   return (
     <aside className="info-panel">
+      <div className="info-panel-header">
+        <span>{chapterId !== null ? "章节检查器" : "项目概览"}</span>
+        <small>{chapterId !== null ? "当前章节" : "全书信息"}</small>
+      </div>
       <div className="info-card">
         <h3>项目</h3>
         <div className="info-title">《{tree.info.name}》</div>
@@ -220,8 +273,10 @@ export function InfoPanel() {
           onClick={() => setShowProjectOutline(true)}
         >
           <span className="outline-label">全书大纲</span>
-          <span className={`info-outline-text${tree.info.outline ? '' : ' empty'}`}>
-            {tree.info.outline || '尚未填写，点击规划主线、设定与梗概…'}
+          <span
+            className={`info-outline-text${tree.info.outline ? "" : " empty"}`}
+          >
+            {tree.info.outline || "尚未填写，点击规划主线、设定与梗概…"}
           </span>
         </button>
       </div>
@@ -264,14 +319,16 @@ export function InfoPanel() {
           <div className="info-card">
             <h3>
               本章纲要
-              <span className={`outline-save-state${outlineState === 'error' ? ' error' : ''}`}>
-                {outlineState === 'saving'
-                  ? '保存中…'
-                  : outlineState === 'saved'
-                    ? '已保存'
-                    : outlineState === 'error'
-                      ? '保存失败'
-                      : ''}
+              <span
+                className={`outline-save-state${outlineState === "error" ? " error" : ""}`}
+              >
+                {outlineState === "saving"
+                  ? "保存中…"
+                  : outlineState === "saved"
+                    ? "已保存"
+                    : outlineState === "error"
+                      ? "保存失败"
+                      : ""}
               </span>
             </h3>
             <span className="outline-label">纲要（这一章写什么）</span>
@@ -293,9 +350,11 @@ export function InfoPanel() {
           <div className="info-card">
             <h3>本章出场</h3>
             {presence === null ||
-            (presence.characters.length === 0 && presence.locations.length === 0) ? (
+            (presence.characters.length === 0 &&
+              presence.locations.length === 0) ? (
               <p className="info-empty">
-                本章暂无已建卡的人物 / 地点出场。在顶栏「人物地点」中建卡后自动统计。
+                本章暂无已建卡的人物 /
+                地点出场。在顶栏「人物地点」中建卡后自动统计。
               </p>
             ) : (
               <>
@@ -349,34 +408,42 @@ export function InfoPanel() {
                 {/* 所属卷 */}
                 <button
                   className="story-ctx-arc story-ctx-volume"
-                  title={`${storyCtx.volume.summary || '卷细纲未填写'}\n点击在故事地图中定位`}
+                  title={`${storyCtx.volume.summary || "卷细纲未填写"}\n点击在故事地图中定位`}
                   onClick={() => focusMapNode(storyCtx.volume.id)}
                 >
-                  第 {storyCtx.volume.sortOrder + 1} 卷 · {storyCtx.volume.title}
+                  第 {storyCtx.volume.sortOrder + 1} 卷 ·{" "}
+                  {storyCtx.volume.title}
                 </button>
 
                 {/* 上游卷 → 本章 → 下游卷 */}
-                {(storyCtx.volumeInEdges.length > 0 || storyCtx.volumeOutEdges.length > 0) && (
+                {(storyCtx.volumeInEdges.length > 0 ||
+                  storyCtx.volumeOutEdges.length > 0) && (
                   <div className="story-ctx-flow">
                     {storyCtx.volumeInEdges.slice(0, 3).map((u) => (
                       <button
                         key={u.edgeId}
                         className="story-ctx-node"
-                        title={`${edgeTypeName(u.edgeType)}${u.label ? `：${u.label}` : ''}\n点击在地图中定位`}
+                        title={`${edgeTypeName(u.edgeType)}${u.label ? `：${u.label}` : ""}\n点击在地图中定位`}
                         onClick={() => focusMapNode(u.volume.id)}
                       >
                         <em>{edgeTypeName(u.edgeType)}</em>
                         {u.volume.title}
                       </button>
                     ))}
-                    {storyCtx.volumeInEdges.length > 0 && <span className="story-ctx-arrow">←</span>}
-                    <span className="story-ctx-node story-ctx-center">本卷</span>
-                    {storyCtx.volumeOutEdges.length > 0 && <span className="story-ctx-arrow">→</span>}
+                    {storyCtx.volumeInEdges.length > 0 && (
+                      <span className="story-ctx-arrow">←</span>
+                    )}
+                    <span className="story-ctx-node story-ctx-center">
+                      本卷
+                    </span>
+                    {storyCtx.volumeOutEdges.length > 0 && (
+                      <span className="story-ctx-arrow">→</span>
+                    )}
                     {storyCtx.volumeOutEdges.slice(0, 3).map((d) => (
                       <button
                         key={d.edgeId}
                         className="story-ctx-node"
-                        title={`${edgeTypeName(d.edgeType)}${d.label ? `：${d.label}` : ''}\n点击在地图中定位`}
+                        title={`${edgeTypeName(d.edgeType)}${d.label ? `：${d.label}` : ""}\n点击在地图中定位`}
                         onClick={() => focusMapNode(d.volume.id)}
                       >
                         <em>{edgeTypeName(d.edgeType)}</em>
@@ -387,7 +454,8 @@ export function InfoPanel() {
                 )}
 
                 {/* 卷内前后章 */}
-                {(storyCtx.prevChapters.length > 0 || storyCtx.nextChapters.length > 0) && (
+                {(storyCtx.prevChapters.length > 0 ||
+                  storyCtx.nextChapters.length > 0) && (
                   <div className="story-ctx-flow story-ctx-flow-chapters">
                     {storyCtx.prevChapters.slice(-2).map((c) => (
                       <button
@@ -399,9 +467,15 @@ export function InfoPanel() {
                         {c.title}
                       </button>
                     ))}
-                    {storyCtx.prevChapters.length > 0 && <span className="story-ctx-arrow">←</span>}
-                    <span className="story-ctx-node story-ctx-center">本章</span>
-                    {storyCtx.nextChapters.length > 0 && <span className="story-ctx-arrow">→</span>}
+                    {storyCtx.prevChapters.length > 0 && (
+                      <span className="story-ctx-arrow">←</span>
+                    )}
+                    <span className="story-ctx-node story-ctx-center">
+                      本章
+                    </span>
+                    {storyCtx.nextChapters.length > 0 && (
+                      <span className="story-ctx-arrow">→</span>
+                    )}
                     {storyCtx.nextChapters.slice(0, 2).map((c) => (
                       <button
                         key={c.id}
@@ -419,22 +493,33 @@ export function InfoPanel() {
                 {storyCtx.planted.map((f) => (
                   <div key={f.edgeId} className="fs-brief">
                     <span
-                      className={`fs-badge${f.status === 1 ? ' done' : f.overdue ? ' warn' : ''}`}
-                      title={f.status === 1 ? '已回收' : f.overdue ? '未回收 · 超期' : '未回收'}
+                      className={`fs-badge${f.status === 1 ? " done" : f.overdue ? " warn" : ""}`}
+                      title={
+                        f.status === 1
+                          ? "已回收"
+                          : f.overdue
+                            ? "未回收 · 超期"
+                            : "未回收"
+                      }
                     >
-                      {f.status === 1 ? '✓' : '埋'}
+                      {f.status === 1 ? "✓" : "埋"}
                     </span>
                     <button
                       className="link-btn"
                       title={`${f.label}\n回收于 ${f.otherDesc}`}
-                      onClick={() => jumpForeshadow(f.otherChapterId, f.otherVolumeId)}
+                      onClick={() =>
+                        jumpForeshadow(f.otherChapterId, f.otherVolumeId)
+                      }
                     >
-                      {f.label || '（未命名伏笔）'}
+                      {f.label || "（未命名伏笔）"}
                     </button>
-                    <span className="story-ctx-more" title={`回收于 ${f.otherDesc}`}>
+                    <span
+                      className="story-ctx-more"
+                      title={`回收于 ${f.otherDesc}`}
+                    >
                       → {f.otherDesc}
-                      {f.span > 0 ? ` · ${f.span} 章` : ''}
-                      {f.overdue && f.status !== 1 ? ' ⚠' : ''}
+                      {f.span > 0 ? ` · ${f.span} 章` : ""}
+                      {f.overdue && f.status !== 1 ? " ⚠" : ""}
                     </span>
                   </div>
                 ))}
@@ -442,17 +527,24 @@ export function InfoPanel() {
                 {/* 本章回收的伏笔 */}
                 {storyCtx.resolved.map((f) => (
                   <div key={f.edgeId} className="fs-brief">
-                    <span className="fs-badge done" title="本章回收">✓</span>
+                    <span className="fs-badge done" title="本章回收">
+                      ✓
+                    </span>
                     <button
                       className="link-btn"
                       title={`${f.label}\n埋设于 ${f.otherDesc}`}
-                      onClick={() => jumpForeshadow(f.otherChapterId, f.otherVolumeId)}
+                      onClick={() =>
+                        jumpForeshadow(f.otherChapterId, f.otherVolumeId)
+                      }
                     >
-                      {f.label || '（未命名伏笔）'}
+                      {f.label || "（未命名伏笔）"}
                     </button>
-                    <span className="story-ctx-more" title={`埋设于 ${f.otherDesc}`}>
+                    <span
+                      className="story-ctx-more"
+                      title={`埋设于 ${f.otherDesc}`}
+                    >
                       ← {f.otherDesc}
-                      {f.span > 0 ? ` · ${f.span} 章前` : ''}
+                      {f.span > 0 ? ` · ${f.span} 章前` : ""}
                     </span>
                   </div>
                 ))}
@@ -460,21 +552,31 @@ export function InfoPanel() {
                 {/* 所属卷的卷级伏笔 */}
                 {storyCtx.volumeForeshadows.length > 0 && (
                   <div className="story-ctx-volfs">
-                    <span className="story-ctx-volfs-label">本卷伏笔（卷级）</span>
+                    <span className="story-ctx-volfs-label">
+                      本卷伏笔（卷级）
+                    </span>
                     {storyCtx.volumeForeshadows.slice(0, 4).map((f) => (
                       <div key={f.edgeId} className="fs-brief">
                         <span
-                          className={`fs-badge${f.status === 1 ? ' done' : f.overdue ? ' warn' : ''}`}
-                          title={f.status === 1 ? '已回收' : f.status === 2 ? '已失效' : '未回收'}
+                          className={`fs-badge${f.status === 1 ? " done" : f.overdue ? " warn" : ""}`}
+                          title={
+                            f.status === 1
+                              ? "已回收"
+                              : f.status === 2
+                                ? "已失效"
+                                : "未回收"
+                          }
                         >
-                          {f.status === 1 ? '✓' : '卷'}
+                          {f.status === 1 ? "✓" : "卷"}
                         </span>
                         <button
                           className="link-btn"
                           title={`${f.label}\n对端 ${f.otherDesc}`}
-                          onClick={() => jumpForeshadow(f.otherChapterId, f.otherVolumeId)}
+                          onClick={() =>
+                            jumpForeshadow(f.otherChapterId, f.otherVolumeId)
+                          }
                         >
-                          {f.label || '（未命名伏笔）'}
+                          {f.label || "（未命名伏笔）"}
                         </button>
                         <span className="story-ctx-more">{f.otherDesc}</span>
                       </div>
@@ -489,7 +591,7 @@ export function InfoPanel() {
                   .map((f) => (
                     <div key={`hint-${f.edgeId}`} className="fs-resolve-hint">
                       <span title="回收端已完稿，可标记伏笔为已回收">
-                        「{f.label || '伏笔'}」回收端已完稿
+                        「{f.label || "伏笔"}」回收端已完稿
                       </span>
                       <button
                         className="btn btn-mini"
@@ -497,10 +599,10 @@ export function InfoPanel() {
                           try {
                             await api.setForeshadowStatus(f.edgeId, 1);
                             await refreshStoryCtx();
-                            window.dispatchEvent(new Event('nf:story-updated'));
-                            showToast('已标记为已回收');
+                            window.dispatchEvent(new Event("nf:story-updated"));
+                            showToast("已标记为已回收");
                           } catch (e) {
-                            showToast(String(e), 'error');
+                            showToast(String(e), "error");
                           }
                         }}
                       >
@@ -515,7 +617,11 @@ export function InfoPanel() {
           <div className="info-card grow">
             <h3>
               版本快照
-              <button className="icon-btn" title="刷新" onClick={() => void refreshVersions()}>
+              <button
+                className="icon-btn"
+                title="刷新"
+                onClick={() => void refreshVersions()}
+              >
                 <IconRefresh />
               </button>
             </h3>
@@ -532,7 +638,7 @@ export function InfoPanel() {
                       <span className="version-time">{v.createdAt}</span>
                       <span className="version-words">
                         {fmt(v.wordCount)} 字
-                        {v.versionType === 2 && ' · 恢复前备份'}
+                        {v.versionType === 2 && " · 恢复前备份"}
                       </span>
                     </div>
                     <button
@@ -560,9 +666,9 @@ export function InfoPanel() {
             try {
               await api.updateProjectOutline(text);
               await refreshTree();
-              showToast('全书大纲已保存');
+              showToast("全书大纲已保存");
             } catch (e) {
-              showToast(String(e), 'error');
+              showToast(String(e), "error");
             }
           }}
         />

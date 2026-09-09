@@ -1,0 +1,761 @@
+.project-view {
+  --workspace-bg: var(--bg);
+  --workspace-panel: var(--bg-panel);
+  --workspace-surface: var(--bg-elevated);
+  --workspace-line: var(--border);
+  --workspace-text: var(--text);
+  --workspace-secondary: var(--text-dim);
+  --workspace-tertiary: var(--text-faint);
+  --workspace-blue: var(--accent);
+  color: var(--workspace-text);
+  background: var(--workspace-bg);
+}
+
+/* One quiet command bar: identity, primary destinations, then global actions. */
+.project-view .topbar {
+  position: relative;
+  z-index: 100;
+  height: 56px;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(300px, 1fr);
+  gap: 16px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--workspace-line);
+  background: var(--workspace-panel);
+  backdrop-filter: saturate(170%) blur(20px);
+  -webkit-backdrop-filter: saturate(170%) blur(20px);
+}
+.project-view .topbar-left {
+  min-width: 0;
+  gap: 9px;
+}
+.project-view .workspace-back {
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+.workspace-mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--workspace-bg);
+  background: var(--workspace-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+.project-identity {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.project-view .topbar-title {
+  overflow: hidden;
+  color: var(--workspace-text);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.project-meta {
+  overflow: hidden;
+  color: var(--workspace-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.project-view .topbar-title-btn {
+  overflow: hidden;
+  color: var(--workspace-text);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: text;
+  text-align: left;
+  font-family: inherit;
+  max-width: 280px;
+}
+.project-view .topbar-title-btn:hover {
+  opacity: 0.75;
+}
+.project-view .topbar-title-input {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--workspace-text);
+  background: var(--workspace-bg-elevated, rgba(0, 0, 0, 0.06));
+  border: 1px solid var(--workspace-accent, #8b7355);
+  border-radius: 4px;
+  padding: 2px 6px;
+  outline: none;
+  width: 200px;
+  font-family: inherit;
+}
+
+.view-switcher {
+  align-self: center;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 10px;
+  background: var(--bg-hover);
+}
+.view-switcher button {
+  min-width: 58px;
+  height: 29px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 7px;
+  color: var(--workspace-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+.view-switcher button:hover {
+  color: var(--workspace-text);
+}
+.view-switcher button.active {
+  color: var(--workspace-text);
+  background: var(--workspace-panel);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.09);
+}
+.view-switcher button:first-child::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.65;
+}
+
+.project-view .topbar-right {
+  min-width: 0;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.project-view .topbar-right > .icon-btn,
+.toolbar-more > .icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.toolbar-export {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 9px;
+  color: var(--workspace-text);
+  background: var(--workspace-panel);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.toolbar-export:hover {
+  background: var(--bg-hover);
+}
+.toolbar-more {
+  position: relative;
+}
+.toolbar-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 2000;
+  width: 220px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  padding: 7px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 14px;
+  background: var(--workspace-surface);
+  box-shadow: 0 20px 55px var(--shadow);
+  animation: menuIn var(--dur-fast) var(--ease);
+}
+.toolbar-popover button {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  color: var(--workspace-text);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.toolbar-popover button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.toolbar-popover button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.toolbar-popover button svg,
+.menu-symbol {
+  width: 16px;
+  flex: 0 0 16px;
+  color: var(--workspace-secondary);
+}
+.toolbar-menu-label {
+  padding: 7px 10px 4px;
+  color: var(--workspace-tertiary);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+.toolbar-menu-sep {
+  display: block;
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--workspace-line);
+}
+.project-view .topbar .win-controls {
+  margin-left: 6px;
+}
+
+.project-view .main-columns {
+  min-width: 0;
+  background: var(--workspace-bg);
+}
+.project-view .sidebar {
+  width: 278px;
+  min-width: 220px;
+  border-right-color: var(--workspace-line);
+  background: var(--workspace-panel);
+}
+.project-view .sidebar-header {
+  min-height: 68px;
+  padding: 15px 14px 10px 18px;
+  color: var(--workspace-text);
+}
+.sidebar-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sidebar-heading > span {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+}
+.sidebar-heading small {
+  color: var(--workspace-tertiary);
+  font-size: 10px;
+  font-weight: 400;
+}
+.project-view .sidebar-actions {
+  gap: 3px;
+}
+.project-view .sidebar-actions .icon-btn {
+  width: 29px;
+  height: 29px;
+  border-radius: 8px;
+}
+.project-view .sidebar-tree {
+  padding: 7px 10px 20px;
+}
+.project-view .volume-group + .volume-group {
+  margin-top: 5px;
+}
+.project-view .volume-row {
+  min-height: 36px;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 630;
+}
+.project-view .volume-row svg {
+  color: var(--workspace-tertiary);
+}
+.project-view .volume-meta {
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+.project-view .chapter-list {
+  position: relative;
+  margin: 1px 0 8px 19px;
+  padding-left: 9px;
+  border-left: 1px solid var(--workspace-line);
+}
+.project-view .chapter-row {
+  min-height: 34px;
+  gap: 8px;
+  margin: 1px 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: var(--workspace-secondary);
+  font-size: 12px;
+}
+.project-view .chapter-row.active {
+  color: var(--workspace-text);
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 var(--workspace-blue);
+}
+.project-view .chapter-status-dot {
+  width: 5px;
+  height: 5px;
+}
+.project-view .chapter-words {
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+.project-view .chapter-empty {
+  padding: 7px 9px 10px;
+  color: var(--workspace-tertiary);
+  font-size: 10.5px;
+}
+
+/* The writing surface stays visually dominant and free of decorative cards. */
+.project-view .editor {
+  min-width: 0;
+  background: var(--editor-bg);
+}
+.project-view .editor-empty {
+  position: relative;
+  gap: 0;
+  padding: 48px;
+  text-align: center;
+  background: radial-gradient(
+    circle at 50% 44%,
+    var(--accent-soft),
+    transparent 26%
+  );
+}
+.editor-empty-eyebrow {
+  margin-bottom: 14px;
+  color: var(--workspace-blue);
+  font-size: 12px;
+  font-weight: 650;
+}
+.project-view .editor-empty h1 {
+  color: var(--editor-text);
+  font-size: clamp(32px, 3.2vw, 44px);
+  line-height: 1.1;
+  letter-spacing: -1.8px;
+  font-weight: 680;
+}
+.project-view .editor-empty p {
+  max-width: 430px;
+  margin-top: 15px;
+  color: var(--workspace-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.editor-empty-action {
+  margin-top: 24px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--workspace-blue);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(0, 113, 227, 0.2);
+  transition:
+    transform 160ms ease,
+    background 160ms ease;
+}
+.editor-empty-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: var(--accent-hover);
+}
+.editor-empty-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.editor-empty-action span {
+  margin-left: 4px;
+  font-size: 18px;
+}
+.project-view .editor-empty small {
+  margin-top: 12px;
+  color: var(--workspace-tertiary);
+  font-size: 10px;
+}
+.project-view .editor-header {
+  width: min(100%, 940px);
+  margin: 0 auto;
+  gap: 6px;
+  padding: 30px 52px 14px;
+}
+.project-view .editor-title {
+  font-size: 25px;
+  line-height: 1.25;
+  letter-spacing: -0.7px;
+  font-weight: 650;
+}
+.project-view .editor-header-meta {
+  gap: 10px;
+}
+.project-view .editor-volume {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--workspace-secondary);
+  background: var(--bg-hover);
+}
+.project-view .copy-menu-wrap .btn {
+  color: var(--workspace-secondary);
+}
+.project-view .editor-scroll {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.project-view .editor-page {
+  max-width: 940px;
+  padding: 24px 52px 100px;
+}
+.project-view .editor-textarea {
+  line-height: inherit;
+}
+.project-view .editor-statsbar {
+  justify-content: center;
+  gap: 24px;
+  height: 30px;
+  padding: 6px 30px;
+  border-top-color: var(--workspace-line);
+  color: var(--workspace-tertiary);
+  background: var(--workspace-panel);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Inspector sections are separated by whitespace and hairlines, not stacked boxes. */
+.project-view .info-panel {
+  width: 300px;
+  padding: 0 16px 24px;
+  gap: 0;
+  border-left-color: var(--workspace-line);
+  background: var(--workspace-panel);
+  overscroll-behavior: contain;
+}
+.info-panel-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--workspace-line);
+  background: var(--workspace-panel);
+}
+.info-panel-header span {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+}
+.info-panel-header small {
+  color: var(--workspace-tertiary);
+  font-size: 10px;
+}
+.project-view .info-card {
+  padding: 18px 3px;
+  border: none;
+  border-bottom: 1px solid var(--workspace-line);
+  border-radius: 0;
+  background: transparent;
+}
+.project-view .info-card:last-of-type {
+  border-bottom: none;
+}
+.project-view .info-card.grow {
+  flex: initial;
+  min-height: 120px;
+}
+.project-view .info-card h3 {
+  margin-bottom: 12px;
+  color: var(--workspace-secondary);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+}
+.project-view .info-title {
+  font-size: 17px;
+  letter-spacing: -0.35px;
+}
+.project-view .info-sub {
+  color: var(--workspace-tertiary);
+  font-size: 11px;
+}
+.project-view .info-grid {
+  gap: 6px;
+  margin-top: 14px;
+}
+.project-view .info-item {
+  min-width: 0;
+  padding: 10px 3px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 10px;
+  background: var(--workspace-bg);
+}
+.project-view .info-num {
+  font-size: 17px;
+}
+.project-view .info-label {
+  font-size: 9.5px;
+}
+.project-view .info-outline {
+  margin-top: 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 10px;
+  background: var(--workspace-bg);
+}
+.project-view .info-row {
+  min-height: 31px;
+  padding: 5px 1px;
+}
+.project-view .info-empty {
+  line-height: 1.65;
+}
+.project-view textarea.outline-input {
+  border: 1px solid transparent;
+  background: var(--workspace-bg);
+}
+.project-view textarea.outline-input:focus {
+  border-color: var(--workspace-blue);
+}
+
+.project-view .statusbar {
+  height: 27px;
+  min-width: 0;
+  padding: 0 15px;
+  gap: 7px;
+  overflow: hidden;
+  border-top-color: var(--workspace-line);
+  color: var(--workspace-tertiary);
+  background: var(--workspace-panel);
+}
+.project-view .save-dot {
+  width: 6px;
+  height: 6px;
+  box-shadow: 0 0 0 3px rgba(48, 209, 88, 0.12);
+}
+.project-view .status-right {
+  min-width: 0;
+  gap: 7px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.project-view .status-sep {
+  opacity: 0.5;
+}
+.project-view .status-num {
+  color: var(--workspace-secondary);
+}
+
+.project-view .main-columns.focus .editor-page {
+  max-width: 850px;
+  padding: 64px 54px 120px;
+}
+.project-view .main-columns.focus .editor-header {
+  width: min(100%, 850px);
+  padding-inline: 54px;
+}
+
+@media (max-width: 1180px) {
+  .project-view .topbar {
+    grid-template-columns: minmax(180px, 1fr) auto minmax(250px, 1fr);
+  }
+  .project-view .sidebar {
+    width: 240px;
+  }
+  .project-view .info-panel {
+    width: 270px;
+  }
+  .view-switcher button {
+    min-width: 50px;
+    padding-inline: 8px;
+  }
+  .project-view .topbar .win-btn {
+    width: 34px;
+  }
+  .project-view .editor-header,
+  .project-view .editor-page {
+    padding-inline: 38px;
+  }
+}
+
+@media (max-width: 920px) {
+  .project-view .topbar {
+    grid-template-columns: minmax(140px, 1fr) auto auto;
+    gap: 8px;
+  }
+  .project-meta,
+  .view-switcher svg,
+  .toolbar-export span {
+    display: none;
+  }
+  .view-switcher button {
+    min-width: 44px;
+    padding-inline: 7px;
+  }
+  .toolbar-export {
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+  .project-view .sidebar {
+    width: 220px;
+    min-width: 190px;
+  }
+  .project-view .info-panel {
+    width: 245px;
+  }
+  .project-view .editor-header,
+  .project-view .editor-page {
+    padding-inline: 28px;
+  }
+}
+
+/* 窄视口（包括桌面窗口 150%/175% 等效宽度）：将两侧栏降级隐藏，
+   给写作面留出完整宽度；顶栏控件保持自己的尺寸，不被 flex/grid 压扁。 */
+@media (max-width: 768px) {
+  .project-view .topbar {
+    grid-template-columns: minmax(118px, 1fr) auto minmax(208px, auto);
+    gap: 4px;
+    padding-inline: 8px;
+  }
+  .project-view .topbar-left,
+  .project-view .topbar-right,
+  .view-switcher {
+    min-width: 0;
+  }
+  .project-view .topbar-right {
+    gap: 2px;
+  }
+  .project-view .topbar-right > .icon-btn,
+  .toolbar-more > .icon-btn,
+  .toolbar-export {
+    flex: 0 0 32px;
+  }
+  .project-meta,
+  .view-switcher svg,
+  .toolbar-export span {
+    display: none;
+  }
+  .view-switcher button {
+    min-width: 42px;
+    padding-inline: 6px;
+  }
+  .project-view .sidebar,
+  .project-view .info-panel {
+    display: none;
+  }
+  /* Modal/PromptModal currently lives inside these columns. Keep only its
+     overlay's containing column alive when a narrow layout hides the panel. */
+  .project-view .sidebar:has(.modal-mask),
+  .project-view .info-panel:has(.modal-mask) {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: block;
+    width: 100vw;
+    min-width: 0;
+    height: 100vh;
+    border: 0;
+    background: transparent;
+    pointer-events: none;
+  }
+  .project-view .sidebar:has(.modal-mask) .modal-mask,
+  .project-view .info-panel:has(.modal-mask) .modal-mask {
+    pointer-events: auto;
+  }
+  .project-view .editor-header,
+  .project-view .editor-page {
+    width: 100%;
+    max-width: none;
+    padding-inline: 22px;
+  }
+  .project-view .editor-empty {
+    padding: 28px 22px;
+  }
+  .project-view .editor-statsbar {
+    padding-inline: 14px;
+    gap: 14px;
+  }
+  .toolbar-popover {
+    right: 0;
+    max-width: calc(100vw - 16px);
+  }
+}
+
+@media (max-width: 640px) {
+  .project-view .topbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 3px;
+  }
+  .project-view .project-identity {
+    display: none;
+  }
+  .project-view .topbar-left {
+    gap: 5px;
+  }
+  .view-switcher {
+    justify-self: center;
+    max-width: 100%;
+  }
+  .view-switcher button {
+    min-width: 38px;
+    padding-inline: 4px;
+    font-size: 11px;
+  }
+  .project-view .editor-header,
+  .project-view .editor-page {
+    padding-inline: 14px;
+  }
+  .project-view .editor-empty {
+    padding-inline: 14px;
+  }
+  .project-view .editor-title {
+    font-size: 21px;
+  }
+  .project-view .statusbar {
+    padding-inline: 9px;
+  }
+  .toolbar-popover {
+    max-height: calc(100vh - 68px);
+    padding: 5px;
+  }
+  .toolbar-popover button {
+    min-height: 34px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-view *,
+  .project-view *::before,
+  .project-view *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

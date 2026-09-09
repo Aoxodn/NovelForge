@@ -11,11 +11,11 @@
  *   - 串行保存队列：保存期间若有新输入，置 savePending，当前请求完成后
  *     立即用最新快照再保存一次，保证最后几次输入不会留在内存
  */
-import { create } from 'zustand';
-import * as api from '../api';
-import { useAppStore } from './appStore';
+import { create } from "zustand";
+import * as api from "../api";
+import { useAppStore } from "./appStore";
 
-export type SaveOutcome = 'saved' | 'noop' | 'queued';
+export type SaveOutcome = "saved" | "noop" | "queued";
 
 interface EditorStore {
   chapterId: number | null;
@@ -41,120 +41,29 @@ interface EditorStore {
   setTitle: (t: string) => void;
   setContent: (c: string) => void;
   setStatus: (s: number) => Promise<void>;
-  /** 保存；成功返回 saved/noop/queued，失败 reject */
+  /** 保存；并发调用会等待同一条队列，成功返回 saved/noop，失败 reject */
   save: (snapshot: boolean) => Promise<SaveOutcome>;
+  /** 等待当前保存队列完全冲刷；用于切章、退出项目和关窗。 */
+  flush: () => Promise<void>;
 }
 
 /** 串行保存循环的安全阀：极端连续输入下最多连续追存的轮数 */
 const MAX_SAVE_LOOPS = 20;
 
-export const useEditorStore = create<EditorStore>((set, get) => ({
-  chapterId: null,
-  volumeId: null,
-  title: '',
-  content: '',
-  status: 0,
-  dirty: false,
-  saving: false,
-  savePending: false,
-  lastSavedAt: null,
-  saveError: null,
-  wordCount: 0,
-  charCount: 0,
-  lastSnapshotAt: 0,
+export const useEditorStore = create<EditorStore>((set, get) => {
+  // 所有调用方共享同一个 promise。save() 在已有保存时不能只返回 queued，
+  // 否则调用方 await 到的只是“登记完成”，clear/destroy 仍可能抢在最后一轮写入之前。
+  let activeSave: Promise<SaveOutcome> | null = null;
+  let loadRequestSeq = 0;
 
-  loadChapter: async (id, skipPreSave = false) => {
-    // 切换章节前先冲刷未保存内容；保存失败必须中止加载，防止丢字。
-    // skipPreSave 用于「恢复历史版本」等需要丢弃内存内容、强制以库为准的场景。
-    const s = get();
-    if (!skipPreSave && s.chapterId !== null && s.dirty) {
-      try {
-        await get().save(false);
-      } catch (e) {
-        useAppStore.getState().showToast(`保存失败，已阻止切换章节：${String(e)}`, 'error');
-        return false;
-      }
-    }
-    try {
-      const detail = await api.getChapter(id);
-      set({
-        chapterId: detail.id,
-        volumeId: detail.volumeId,
-        title: detail.title,
-        content: detail.content,
-        status: detail.status,
-        dirty: false,
-        saving: false,
-        savePending: false,
-        saveError: null,
-        wordCount: detail.wordCount,
-        charCount: detail.charCount,
-        lastSavedAt: detail.updatedAt,
-        lastSnapshotAt: Date.now(),
-      });
-      return true;
-    } catch (e) {
-      useAppStore.getState().showToast(String(e), 'error');
-      return false;
-    }
-  },
-
-  clear: () =>
-    set({
-      chapterId: null,
-      volumeId: null,
-      title: '',
-      content: '',
-      status: 0,
-      dirty: false,
-      saving: false,
-      savePending: false,
-      lastSavedAt: null,
-      saveError: null,
-      wordCount: 0,
-      charCount: 0,
-    }),
-
-  setTitle: (t) => {
-    if (t === get().title) return;
-    // 保存进行中的修改标记为待追存
-    if (get().saving) set({ title: t, dirty: true, savePending: true });
-    else set({ title: t, dirty: true });
-  },
-
-  setContent: (c) => {
-    if (c === get().content) return;
-    if (get().saving) set({ content: c, dirty: true, savePending: true });
-    else set({ content: c, dirty: true });
-  },
-
-  setStatus: async (s) => {
-    const id = get().chapterId;
-    if (id === null) return;
-    try {
-      await api.setChapterStatus(id, s);
-      set({ status: s });
-      useAppStore.getState().refreshTree();
-    } catch (e) {
-      useAppStore.getState().showToast(String(e), 'error');
-    }
-  },
-
-  save: async (snapshot) => {
-    const start = get();
-    if (start.chapterId === null) return 'noop';
-    // 已有保存在途：登记待追存后返回，由在途循环负责再存，避免并发写
-    if (start.saving) {
-      set({ savePending: true });
-      return 'queued';
-    }
-    if (!snapshot && !start.dirty) return 'noop';
+  const runSave = async (snapshot: boolean): Promise<SaveOutcome> => {
+    if (get().chapterId === null) return "noop";
 
     let wantSnapshot = snapshot;
     // 串行保存循环：每轮保存发起时的快照；若期间又有新输入则再存一轮
     for (let loop = 0; loop < MAX_SAVE_LOOPS; loop++) {
       const cur = get();
-      if (cur.chapterId === null) return 'noop';
+      if (cur.chapterId === null) return "noop";
       // 捕获本轮要保存的内容
       const chapterId = cur.chapterId;
       const title = cur.title;
@@ -165,9 +74,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         res = await api.saveChapter(chapterId, title, content, wantSnapshot);
       } catch (e) {
         // 失败必须抛出，保留 dirty 让调用方/重试机制处理
-        set({ saving: false, saveError: String(e), dirty: true });
+        // 若期间已经切到别章/清空，不要把旧章的错误写回新状态。
+        if (get().chapterId === chapterId) {
+          set({ saving: false, saveError: String(e), dirty: true });
+        }
         throw e;
       }
+
+      // skipPreSave 切章或 clear 可能在旧请求落回前替换了编辑器内容。
+      // 旧请求已经完成，但其统计/dirty 状态不能污染新章节。
+      if (get().chapterId !== chapterId) return "noop";
       const after = get();
       const unchanged = after.title === title && after.content === content;
       set({
@@ -176,7 +92,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         wordCount: res.wordCount,
         charCount: res.charCount,
         ...(unchanged ? { dirty: false } : {}),
-        ...(res.snapshotCreated || wantSnapshot ? { lastSnapshotAt: Date.now() } : {}),
+        ...(res.snapshotCreated || wantSnapshot
+          ? { lastSnapshotAt: Date.now() }
+          : {}),
       });
       // 今日码字由后端权威值校准
       useAppStore.getState().setTodayWords(res.todayWords);
@@ -187,10 +105,156 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         wantSnapshot = false;
         continue;
       }
-      return 'saved';
+      // 并发调用 save() 本身不代表产生了新内容；不要把无意义的 pending
+      // 留下，否则 flush 会反复调用一个返回 noop 的 save。
+      if (latest.savePending) set({ savePending: false });
+      return "saved";
     }
     // 达到安全阀仍未追平：保持 dirty，交由下次防抖保存兜底
     set({ saving: false });
-    return 'saved';
-  },
-}));
+    return "saved";
+  };
+
+  return {
+    chapterId: null,
+    volumeId: null,
+    title: "",
+    content: "",
+    status: 0,
+    dirty: false,
+    saving: false,
+    savePending: false,
+    lastSavedAt: null,
+    saveError: null,
+    wordCount: 0,
+    charCount: 0,
+    lastSnapshotAt: 0,
+
+    loadChapter: async (id, skipPreSave = false) => {
+      const request = ++loadRequestSeq;
+      // 切换章节前先冲刷未保存内容；保存失败必须中止加载，防止丢字。
+      // skipPreSave 用于「恢复历史版本」等需要丢弃内存内容、强制以库为准的场景。
+      const s = get();
+      if (!skipPreSave && s.chapterId !== null && s.dirty) {
+        try {
+          await get().save(false);
+        } catch (e) {
+          if (request === loadRequestSeq) {
+            useAppStore
+              .getState()
+              .showToast(`保存失败，已阻止切换章节：${String(e)}`, "error");
+          }
+          return false;
+        }
+      }
+      // 若用户在保存期间又点了另一章，本次请求已经过期，不再发起/采纳旧章节查询。
+      if (request !== loadRequestSeq) return false;
+      try {
+        const detail = await api.getChapter(id);
+        // 快速 A → B 切换时，A 的迟到响应不能覆盖最后一次选择。
+        if (request !== loadRequestSeq) return false;
+        set({
+          chapterId: detail.id,
+          volumeId: detail.volumeId,
+          title: detail.title,
+          content: detail.content,
+          status: detail.status,
+          dirty: false,
+          saving: false,
+          savePending: false,
+          saveError: null,
+          wordCount: detail.wordCount,
+          charCount: detail.charCount,
+          lastSavedAt: detail.updatedAt,
+          lastSnapshotAt: Date.now(),
+        });
+        return true;
+      } catch (e) {
+        if (request === loadRequestSeq) {
+          useAppStore.getState().showToast(String(e), "error");
+        }
+        return false;
+      }
+    },
+
+    clear: () => {
+      // 让所有尚未返回的 loadChapter 响应失效。
+      loadRequestSeq++;
+      set({
+        chapterId: null,
+        volumeId: null,
+        title: "",
+        content: "",
+        status: 0,
+        dirty: false,
+        saving: false,
+        savePending: false,
+        lastSavedAt: null,
+        saveError: null,
+        wordCount: 0,
+        charCount: 0,
+      });
+    },
+
+    setTitle: (t) => {
+      if (t === get().title) return;
+      // 保存进行中的修改标记为待追存
+      if (get().saving) set({ title: t, dirty: true, savePending: true });
+      else set({ title: t, dirty: true });
+    },
+
+    setContent: (c) => {
+      if (c === get().content) return;
+      if (get().saving) set({ content: c, dirty: true, savePending: true });
+      else set({ content: c, dirty: true });
+    },
+
+    setStatus: async (s) => {
+      const id = get().chapterId;
+      if (id === null) return;
+      try {
+        await api.setChapterStatus(id, s);
+        set({ status: s });
+        useAppStore.getState().refreshTree();
+      } catch (e) {
+        useAppStore.getState().showToast(String(e), "error");
+      }
+    },
+
+    save: async (snapshot) => {
+      const start = get();
+      if (start.chapterId === null) return "noop";
+      // 已有保存在途：登记待追存，并等待同一条保存循环完成，避免 clear/destroy 抢跑。
+      if (activeSave) {
+        if (get().dirty) set({ savePending: true });
+        return await activeSave;
+      }
+      if (!snapshot && !start.dirty) return "noop";
+      const operation = runSave(snapshot);
+      activeSave = operation;
+      try {
+        return await operation;
+      } finally {
+        if (activeSave === operation) activeSave = null;
+      }
+    },
+
+    flush: async () => {
+      // 循环处理“保存结束瞬间又产生输入”的边界；正常情况只跑一轮。
+      for (;;) {
+        const inFlight = activeSave;
+        if (inFlight) {
+          await inFlight;
+          continue;
+        }
+        const current = get();
+        if (current.chapterId === null) return;
+        if (!current.dirty && !current.saving) {
+          if (current.savePending) set({ savePending: false });
+          return;
+        }
+        await get().save(false);
+      }
+    },
+  };
+});

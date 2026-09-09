@@ -65,6 +65,13 @@ export const closeProject = () => cmd<void>('close_project');
 export const updateProjectOutline = (outline: string) =>
   cmd<void>('update_project_outline', { outline });
 
+export const updateProjectInfo = (patch: { name?: string; author?: string; description?: string }) =>
+  cmd<ProjectTree>('update_project_info', {
+    name: patch.name ?? null,
+    author: patch.author ?? null,
+    description: patch.description ?? null,
+  });
+
 export const listRecentProjects = () =>
   cmd<RecentProject[]>('list_recent_projects');
 

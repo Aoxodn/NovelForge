@@ -2,14 +2,14 @@
  * 左侧小说目录（文档第十一、十二节）：
  * 卷（可折叠）/ 章节两级树；支持右键菜单、跨卷拖拽、卷内排序。
  */
-import { useEffect, useMemo, useState } from 'react';
-import * as api from '../api';
-import { useAppStore } from '../store/appStore';
-import { useEditorStore } from '../store/editorStore';
-import type { ChapterMeta, Volume } from '../types/models';
-import { ContextMenu } from './ContextMenu';
-import { PromptModal } from './Modal';
-import { ImportModal } from './ImportModal';
+import { useEffect, useMemo, useState } from "react";
+import * as api from "../api";
+import { useAppStore } from "../store/appStore";
+import { useEditorStore } from "../store/editorStore";
+import type { ChapterMeta, Volume } from "../types/models";
+import { ContextMenu } from "./ContextMenu";
+import { PromptModal } from "./Modal";
+import { ImportModal } from "./ImportModal";
 import {
   IconChevron,
   IconImport,
@@ -17,20 +17,44 @@ import {
   IconPlus,
   IconSortReverse,
   IconTrash,
-} from './icons';
-import { TrashModal } from './TrashModal';
-import { fmt } from '../utils/text';
+} from "./icons";
+import { TrashModal } from "./TrashModal";
+import { fmt } from "../utils/text";
 
 interface DragState {
-  type: 'chapter';
+  type: "chapter";
   chapterId: number;
   fromVolumeId: number;
 }
 interface VolumeDragState {
-  type: 'volume';
+  type: "volume";
   volumeId: number;
 }
 type AnyDrag = DragState | VolumeDragState | null;
+
+/** Keyboard activation shared by volume and chapter treeitems. */
+export function isTreeActivationKey(key: string): boolean {
+  return key === "Enter" || key === " ";
+}
+
+/**
+ * 计算卷拖拽的后端目标索引。
+ * Rust move_volume 会先移除源卷，再把卷插入 targetIndex；因此源卷位于
+ * 目标之前时，目标索引必须先减一。返回值始终是“移除源卷后列表”的索引。
+ */
+export function calculateVolumeDropIndex(
+  sourceIndex: number,
+  targetIndex: number,
+  position: "before" | "after",
+  volumeCount: number,
+): number {
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+    return targetIndex;
+  }
+  const targetAfterRemoval = targetIndex - (sourceIndex < targetIndex ? 1 : 0);
+  const insertionIndex = targetAfterRemoval + (position === "after" ? 1 : 0);
+  return Math.max(0, Math.min(insertionIndex, Math.max(0, volumeCount - 1)));
+}
 
 export function ChapterTree() {
   const tree = useAppStore((s) => s.tree)!;
@@ -46,13 +70,16 @@ export function ChapterTree() {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [drag, setDrag] = useState<AnyDrag>(null);
   /** 卷拖拽时的悬停位置（用于显示插入指示线） */
-  const [dragOverVol, setDragOverVol] = useState<{ volumeId: number; pos: 'before' | 'after' } | null>(null);
+  const [dragOverVol, setDragOverVol] = useState<{
+    volumeId: number;
+    pos: "before" | "after";
+  } | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [prompt, setPrompt] = useState<
-    | { kind: 'newVolume' }
-    | { kind: 'renameVolume'; volume: Volume }
-    | { kind: 'newChapter'; volumeId: number }
-    | { kind: 'renameChapter'; chapter: ChapterMeta }
+    | { kind: "newVolume" }
+    | { kind: "renameVolume"; volume: Volume }
+    | { kind: "newChapter"; volumeId: number }
+    | { kind: "renameChapter"; chapter: ChapterMeta }
     | null
   >(null);
   /** 回收站弹窗 */
@@ -72,10 +99,10 @@ export function ChapterTree() {
       const currentVolumeId = useEditorStore.getState().volumeId;
       const target =
         tree.volumes.find((v) => v.id === currentVolumeId) ?? tree.volumes[0];
-      if (target) setPrompt({ kind: 'newChapter', volumeId: target.id });
+      if (target) setPrompt({ kind: "newChapter", volumeId: target.id });
     };
-    window.addEventListener('nf:new-chapter', handler);
-    return () => window.removeEventListener('nf:new-chapter', handler);
+    window.addEventListener("nf:new-chapter", handler);
+    return () => window.removeEventListener("nf:new-chapter", handler);
   }, [tree]);
 
   // 首页「导入小说」流程：项目打开后自动弹出智能导入（预选文件）
@@ -98,7 +125,7 @@ export function ChapterTree() {
       setPrompt(null);
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
@@ -109,19 +136,22 @@ export function ChapterTree() {
       setPrompt(null);
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
   const doCreateChapter = async (volumeId: number, title: string) => {
     try {
-      const detail = await api.createChapter(volumeId, title.trim() || undefined);
+      const detail = await api.createChapter(
+        volumeId,
+        title.trim() || undefined,
+      );
       setPrompt(null);
       await refreshTree();
       const ok = await loadChapter(detail.id);
       if (ok) selectChapter(detail.id);
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
@@ -135,7 +165,7 @@ export function ChapterTree() {
       const ed = useEditorStore.getState();
       if (ed.chapterId === chapter.id) ed.setTitle(title.trim());
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
@@ -148,19 +178,23 @@ export function ChapterTree() {
       await api.deleteVolume(volume.id);
       // 若当前编辑章节位于被删卷中，清空编辑器
       const ed = useEditorStore.getState();
-      const inDeleted = chaptersByVolume.get(volume.id)?.some((c) => c.id === ed.chapterId);
+      const inDeleted = chaptersByVolume
+        .get(volume.id)
+        ?.some((c) => c.id === ed.chapterId);
       if (inDeleted) {
         selectChapter(null);
         clearEditor();
       }
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
   const confirmDeleteChapter = async (chapter: ChapterMeta) => {
-    const ok = window.confirm(`确定删除「${chapter.title}」吗？\n\n章节将进入回收站，保留 7 天，可随时恢复。`);
+    const ok = window.confirm(
+      `确定删除「${chapter.title}」吗？\n\n章节将进入回收站，保留 7 天，可随时恢复。`,
+    );
     if (!ok) return;
     try {
       await api.deleteChapter(chapter.id);
@@ -171,7 +205,7 @@ export function ChapterTree() {
       }
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
@@ -188,26 +222,26 @@ export function ChapterTree() {
       await api.moveChapter(chapterId, volumeId, targetIndex);
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
   const dropOnVolume = async (volumeId: number) => {
-    if (!drag || drag.type !== 'chapter') return;
+    if (!drag || drag.type !== "chapter") return;
     const list = chaptersByVolume.get(volumeId) ?? [];
     if (drag.fromVolumeId === volumeId) return; // 同卷且目标是卷尾 = 无操作（除非想移到末尾）
     try {
       await api.moveChapter(drag.chapterId, volumeId, list.length);
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     } finally {
       setDrag(null);
     }
   };
 
   const dropOnChapter = async (target: ChapterMeta) => {
-    if (!drag || drag.type !== 'chapter') return;
+    if (!drag || drag.type !== "chapter") return;
     if (drag.chapterId === target.id) return;
     const list = chaptersByVolume.get(target.volumeId) ?? [];
     let targetIndex = list.findIndex((c) => c.id === target.id);
@@ -220,7 +254,7 @@ export function ChapterTree() {
       await api.moveChapter(drag.chapterId, target.volumeId, targetIndex);
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     } finally {
       setDrag(null);
     }
@@ -232,27 +266,62 @@ export function ChapterTree() {
     e.preventDefault();
     e.stopPropagation();
     ContextMenu.open(e.clientX, e.clientY, [
-      { label: '新建章节', onClick: () => setPrompt({ kind: 'newChapter', volumeId: volume.id }) },
-      { separator: true, label: '' },
-      { label: '重命名卷', onClick: () => setPrompt({ kind: 'renameVolume', volume }) },
-      { label: '上移', onClick: () => moveVolume(volume, -1) },
-      { label: '下移', onClick: () => moveVolume(volume, 1) },
-      { label: '章节倒序', icon: <IconSortReverse />, onClick: () => void reverseVolume(volume) },
-      { separator: true, label: '' },
-      { label: '删除卷', danger: true, onClick: () => confirmDeleteVolume(volume) },
+      {
+        label: "新建章节",
+        onClick: () => setPrompt({ kind: "newChapter", volumeId: volume.id }),
+      },
+      { separator: true, label: "" },
+      {
+        label: "重命名卷",
+        onClick: () => setPrompt({ kind: "renameVolume", volume }),
+      },
+      { label: "上移", onClick: () => moveVolume(volume, -1) },
+      { label: "下移", onClick: () => moveVolume(volume, 1) },
+      {
+        label: "章节倒序",
+        icon: <IconSortReverse />,
+        onClick: () => void reverseVolume(volume),
+      },
+      { separator: true, label: "" },
+      {
+        label: "删除卷",
+        danger: true,
+        onClick: () => confirmDeleteVolume(volume),
+      },
     ]);
   };
 
-  const chapterMenu = (e: React.MouseEvent, chapter: ChapterMeta, list: ChapterMeta[]) => {
+  const chapterMenu = (
+    e: React.MouseEvent,
+    chapter: ChapterMeta,
+    list: ChapterMeta[],
+  ) => {
     e.preventDefault();
     e.stopPropagation();
     const idx = list.findIndex((c) => c.id === chapter.id);
     ContextMenu.open(e.clientX, e.clientY, [
-      { label: '重命名章节', onClick: () => setPrompt({ kind: 'renameChapter', chapter }) },
-      { label: '上移', disabled: idx <= 0, onClick: () => moveChapterWithin(chapter.id, idx, idx - 1, chapter.volumeId) },
-      { label: '下移', disabled: idx >= list.length - 1, onClick: () => moveChapterWithin(chapter.id, idx, idx + 1, chapter.volumeId) },
-      { separator: true, label: '' },
-      { label: '删除章节', danger: true, onClick: () => confirmDeleteChapter(chapter) },
+      {
+        label: "重命名章节",
+        onClick: () => setPrompt({ kind: "renameChapter", chapter }),
+      },
+      {
+        label: "上移",
+        disabled: idx <= 0,
+        onClick: () =>
+          moveChapterWithin(chapter.id, idx, idx - 1, chapter.volumeId),
+      },
+      {
+        label: "下移",
+        disabled: idx >= list.length - 1,
+        onClick: () =>
+          moveChapterWithin(chapter.id, idx, idx + 1, chapter.volumeId),
+      },
+      { separator: true, label: "" },
+      {
+        label: "删除章节",
+        danger: true,
+        onClick: () => confirmDeleteChapter(chapter),
+      },
     ]);
   };
 
@@ -260,9 +329,9 @@ export function ChapterTree() {
     try {
       await api.reverseVolumeChapters(volume.id);
       await refreshTree();
-      showToast('章节已倒序');
+      showToast("章节已倒序");
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
@@ -271,14 +340,15 @@ export function ChapterTree() {
     e.preventDefault();
     const lastVolume = tree.volumes[tree.volumes.length - 1];
     ContextMenu.open(e.clientX, e.clientY, [
-      { label: '新建卷', onClick: () => setPrompt({ kind: 'newVolume' }) },
+      { label: "新建卷", onClick: () => setPrompt({ kind: "newVolume" }) },
       {
-        label: '新建章节（追加到末卷）',
+        label: "新建章节（追加到末卷）",
         disabled: !lastVolume,
-        onClick: () => setPrompt({ kind: 'newChapter', volumeId: lastVolume.id }),
+        onClick: () =>
+          setPrompt({ kind: "newChapter", volumeId: lastVolume.id }),
       },
-      { separator: true, label: '' },
-      { label: '导入小说…', onClick: () => setShowImport(true) },
+      { separator: true, label: "" },
+      { label: "导入小说…", onClick: () => setShowImport(true) },
     ]);
   };
 
@@ -290,31 +360,35 @@ export function ChapterTree() {
       await api.moveVolume(volume.id, target);
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     }
   };
 
   // 卷拖拽排序：拖到目标卷的上方或下方
-  const dropVolumeReorder = async (targetVolumeId: number, pos: 'before' | 'after') => {
-    if (!drag || drag.type !== 'volume') return;
+  const dropVolumeReorder = async (
+    targetVolumeId: number,
+    pos: "before" | "after",
+  ) => {
+    if (!drag || drag.type !== "volume") return;
     if (drag.volumeId === targetVolumeId) {
       setDrag(null);
       setDragOverVol(null);
       return;
     }
     const fromIdx = tree.volumes.findIndex((v) => v.id === drag.volumeId);
-    let targetIdx = tree.volumes.findIndex((v) => v.id === targetVolumeId);
+    const targetIdx = tree.volumes.findIndex((v) => v.id === targetVolumeId);
     if (fromIdx === -1 || targetIdx === -1) return;
-    // 同方向拖动时补偿被移出元素的位移
-    if (fromIdx < targetIdx && pos === 'before') targetIdx -= 1;
-    if (fromIdx < targetIdx && pos === 'after') targetIdx -= 0; // after 不需要补偿
-    if (pos === 'after') targetIdx += 1;
-    targetIdx = Math.max(0, Math.min(targetIdx, tree.volumes.length));
+    const targetIndex = calculateVolumeDropIndex(
+      fromIdx,
+      targetIdx,
+      pos,
+      tree.volumes.length,
+    );
     try {
-      await api.moveVolume(drag.volumeId, targetIdx);
+      await api.moveVolume(drag.volumeId, targetIndex);
       await refreshTree();
     } catch (e) {
-      showToast(String(e), 'error');
+      showToast(String(e), "error");
     } finally {
       setDrag(null);
       setDragOverVol(null);
@@ -342,11 +416,17 @@ export function ChapterTree() {
       onContextMenu={blankMenu}
     >
       <div className="sidebar-header">
-        <span>目录</span>
+        <div className="sidebar-heading">
+          <span>章节</span>
+          <small>
+            {tree.stats.volumeCount} 卷 · {tree.stats.chapterCount} 章
+          </small>
+        </div>
         <div className="sidebar-actions">
           <button
             className="icon-btn"
             title="导入 TXT / DOCX / MD（智能拆章）"
+            aria-label="导入小说"
             onClick={() => setShowImport(true)}
           >
             <IconImport />
@@ -354,16 +434,21 @@ export function ChapterTree() {
           <button
             className="icon-btn"
             title="新建"
+            aria-label="新建章节或分卷"
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               const lastVolume = tree.volumes[tree.volumes.length - 1];
               ContextMenu.open(r.left, r.bottom + 4, [
                 {
-                  label: '新建章节',
+                  label: "新建章节",
                   disabled: !lastVolume,
-                  onClick: () => setPrompt({ kind: 'newChapter', volumeId: lastVolume.id }),
+                  onClick: () =>
+                    setPrompt({ kind: "newChapter", volumeId: lastVolume.id }),
                 },
-                { label: '新建分卷', onClick: () => setPrompt({ kind: 'newVolume' }) },
+                {
+                  label: "新建分卷",
+                  onClick: () => setPrompt({ kind: "newVolume" }),
+                },
               ]);
             }}
           >
@@ -372,10 +457,15 @@ export function ChapterTree() {
           <button
             className="icon-btn"
             title="更多操作"
+            aria-label="章节更多操作"
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               ContextMenu.open(r.left - 100, r.bottom + 4, [
-                { label: '回收站', icon: <IconTrash />, onClick: () => setShowTrash(true) },
+                {
+                  label: "回收站",
+                  icon: <IconTrash />,
+                  onClick: () => setShowTrash(true),
+                },
               ]);
             }}
           >
@@ -384,28 +474,40 @@ export function ChapterTree() {
         </div>
       </div>
 
-      <div className="sidebar-tree">
+      <div className="sidebar-tree" role="tree" aria-label="章节目录">
         {tree.volumes.map((volume) => {
           const chapters = chaptersByVolume.get(volume.id) ?? [];
           const isCollapsed = collapsed.has(volume.id);
           return (
             <div key={volume.id} className="volume-group">
               <div
-                className={`volume-row${dragOverVol?.volumeId === volume.id ? ` drop-${dragOverVol.pos}` : ''}${drag?.type === 'volume' && drag.volumeId === volume.id ? ' dragging' : ''}`}
+                className={`volume-row${dragOverVol?.volumeId === volume.id ? ` drop-${dragOverVol.pos}` : ""}${drag?.type === "volume" && drag.volumeId === volume.id ? " dragging" : ""}`}
+                role="treeitem"
+                tabIndex={0}
+                aria-expanded={!isCollapsed}
                 draggable
                 onClick={() => toggleCollapse(volume.id)}
+                onKeyDown={(e) => {
+                  if (isTreeActivationKey(e.key)) {
+                    e.preventDefault();
+                    toggleCollapse(volume.id);
+                  }
+                }}
                 onContextMenu={(e) => volumeMenu(e, volume)}
                 onDragStart={(e) => {
                   e.stopPropagation();
-                  setDrag({ type: 'volume', volumeId: volume.id });
-                  e.dataTransfer.effectAllowed = 'move';
+                  setDrag({ type: "volume", volumeId: volume.id });
+                  e.dataTransfer.effectAllowed = "move";
                 }}
                 onDragOver={(e) => {
-                  if (drag?.type === 'volume') {
+                  if (drag?.type === "volume") {
                     e.preventDefault();
-                    e.dataTransfer.dropEffect = 'move';
+                    e.dataTransfer.dropEffect = "move";
                     const rect = e.currentTarget.getBoundingClientRect();
-                    const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                    const pos =
+                      e.clientY < rect.top + rect.height / 2
+                        ? "before"
+                        : "after";
                     setDragOverVol({ volumeId: volume.id, pos });
                   } else if (drag) {
                     e.preventDefault();
@@ -417,8 +519,11 @@ export function ChapterTree() {
                 onDrop={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  if (drag?.type === 'volume') {
-                    void dropVolumeReorder(volume.id, dragOverVol?.pos ?? 'after');
+                  if (drag?.type === "volume") {
+                    void dropVolumeReorder(
+                      volume.id,
+                      dragOverVol?.pos ?? "after",
+                    );
                   } else {
                     dropOnVolume(volume.id);
                   }
@@ -434,15 +539,28 @@ export function ChapterTree() {
               </div>
 
               {!isCollapsed && (
-                <ul className="chapter-list">
-                  {chapters.length === 0 && <li className="chapter-empty">（空卷，右键新建章节）</li>}
+                <ul
+                  className="chapter-list"
+                  role="group"
+                  aria-label={`${volume.title}章节`}
+                >
+                  {chapters.length === 0 && (
+                    <li className="chapter-empty">还没有章节</li>
+                  )}
                   {chapters.map((ch) => (
                     <li
                       key={ch.id}
-                      className={`chapter-row${ch.id === selectedChapterId ? ' active' : ''}`}
+                      className={`chapter-row${ch.id === selectedChapterId ? " active" : ""}`}
+                      role="treeitem"
+                      tabIndex={0}
+                      aria-selected={ch.id === selectedChapterId}
                       draggable
                       onDragStart={() =>
-                        setDrag({ type: 'chapter', chapterId: ch.id, fromVolumeId: ch.volumeId })
+                        setDrag({
+                          type: "chapter",
+                          chapterId: ch.id,
+                          fromVolumeId: ch.volumeId,
+                        })
                       }
                       onDragOver={(e) => {
                         if (drag) e.preventDefault();
@@ -452,9 +570,18 @@ export function ChapterTree() {
                         void dropOnChapter(ch);
                       }}
                       onClick={() => onChapterClick(ch.id)}
+                      onKeyDown={(e) => {
+                        if (isTreeActivationKey(e.key)) {
+                          e.preventDefault();
+                          void onChapterClick(ch.id);
+                        }
+                      }}
                       onContextMenu={(e) => chapterMenu(e, ch, chapters)}
                     >
-                      <span className="chapter-status-dot" data-status={ch.status} />
+                      <span
+                        className="chapter-status-dot"
+                        data-status={ch.status}
+                      />
                       <span className="chapter-title" title={ch.title}>
                         {ch.title}
                       </span>
@@ -468,7 +595,7 @@ export function ChapterTree() {
         })}
       </div>
 
-      {prompt?.kind === 'newVolume' && (
+      {prompt?.kind === "newVolume" && (
         <PromptModal
           title="新建卷"
           placeholder="例如：第一卷 青云"
@@ -476,7 +603,7 @@ export function ChapterTree() {
           onConfirm={doCreateVolume}
         />
       )}
-      {prompt?.kind === 'renameVolume' && (
+      {prompt?.kind === "renameVolume" && (
         <PromptModal
           title="重命名卷"
           initial={prompt.volume.title}
@@ -484,7 +611,7 @@ export function ChapterTree() {
           onConfirm={(v) => doRenameVolume(prompt.volume, v)}
         />
       )}
-      {prompt?.kind === 'newChapter' && (
+      {prompt?.kind === "newChapter" && (
         <PromptModal
           title="新建章节"
           placeholder="留空则自动编号（第N章）"
@@ -492,7 +619,7 @@ export function ChapterTree() {
           onConfirm={(v) => doCreateChapter(prompt.volumeId, v)}
         />
       )}
-      {prompt?.kind === 'renameChapter' && (
+      {prompt?.kind === "renameChapter" && (
         <PromptModal
           title="重命名章节"
           initial={prompt.chapter.title}
@@ -512,7 +639,10 @@ export function ChapterTree() {
       )}
 
       {showTrash && (
-        <TrashModal onClose={() => setShowTrash(false)} onChanged={refreshTree} />
+        <TrashModal
+          onClose={() => setShowTrash(false)}
+          onChanged={refreshTree}
+        />
       )}
     </aside>
   );

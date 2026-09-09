@@ -1,16 +1,34 @@
-/** 顶部栏：返回首页 / 项目信息 / 视图切换 / 搜索 / 人物地点卡 / 码字统计 / 随机取名 / 导出 / 备份 / 主题切换 */
-import { useAppStore } from '../store/appStore';
-import { useCountUp } from '../hooks/useCountUp';
-import { IconBack, IconChart, IconDice, IconExport, IconFocus, IconMap, IconOverview, IconSearch, IconSettings, IconShield, IconUsers } from './icons';
-import { WindowControls } from './WindowControls';
-import { fmt } from '../utils/text';
-import type { Theme } from '../types/models';
+/** Project toolbar: identity / primary views / focused actions / overflow tools. */
+import { useEffect, useId, useRef, useState } from "react";
+import { useAppStore } from "../store/appStore";
+import { useCountUp } from "../hooks/useCountUp";
+import {
+  IconBack,
+  IconChart,
+  IconDice,
+  IconExport,
+  IconFocus,
+  IconMap,
+  IconMore,
+  IconOverview,
+  IconSearch,
+  IconSettings,
+  IconShield,
+  IconUsers,
+} from "./icons";
+import { WindowControls } from "./WindowControls";
+import { fmt } from "../utils/text";
+import * as api from "../api";
+import type { Theme } from "../types/models";
 
-const THEME_ORDER: Theme[] = ['dark', 'light', 'sepia'];
-const THEME_LABEL: Record<Theme, string> = { dark: '深色', light: '浅色', sepia: '护眼' };
+const THEME_ORDER: Theme[] = ["dark", "light", "sepia"];
+const THEME_LABEL: Record<Theme, string> = {
+  dark: "深色",
+  light: "浅色",
+  sepia: "护眼",
+};
 
 interface TopBarProps {
-  /** 返回首页（由 ProjectView 处理：先播关书动画再真正关闭项目） */
   onBack: () => void;
   onOpenSettings: () => void;
   onOpenExport: () => void;
@@ -21,7 +39,16 @@ interface TopBarProps {
   onOpenNames: () => void;
 }
 
-export function TopBar({ onBack, onOpenSettings, onOpenExport, onOpenSearch, onOpenBackup, onOpenCards, onOpenStats, onOpenNames }: TopBarProps) {
+export function TopBar({
+  onBack,
+  onOpenSettings,
+  onOpenExport,
+  onOpenSearch,
+  onOpenBackup,
+  onOpenCards,
+  onOpenStats,
+  onOpenNames,
+}: TopBarProps) {
   const tree = useAppStore((s) => s.tree)!;
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
@@ -30,116 +57,275 @@ export function TopBar({ onBack, onOpenSettings, onOpenExport, onOpenSearch, onO
   const viewMode = useAppStore((s) => s.viewMode);
   const setViewMode = useAppStore((s) => s.setViewMode);
   const setToolModal = useAppStore((s) => s.setToolModal);
+  const refreshTree = useAppStore((s) => s.refreshTree);
+  const showToast = useAppStore((s) => s.showToast);
   const selectedChapterId = useAppStore((s) => s.selectedChapterId);
-  // 全书字数滚动（保存后微反馈）
   const totalWords = useCountUp(tree.stats.totalWordCount);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingName, setSavingName] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const didOpenMore = useRef(false);
+  const restoreMoreFocus = useRef(true);
+  const popoverId = `toolbar-popover-${useId().replace(/:/g, "")}`;
+
+  useEffect(() => {
+    if (moreOpen) {
+      didOpenMore.current = true;
+      const first = moreRef.current?.querySelector<HTMLButtonElement>(
+        "button:not(:disabled)",
+      );
+      first?.focus();
+      return;
+    }
+    if (didOpenMore.current && restoreMoreFocus.current) {
+      moreButtonRef.current?.focus();
+    }
+    restoreMoreFocus.current = true;
+  }, [moreOpen]);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!moreRef.current?.contains(event.target as Node)) {
+        restoreMoreFocus.current = true;
+        setMoreOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        restoreMoreFocus.current = true;
+        setMoreOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [moreOpen]);
 
   const cycleTheme = () => {
     const idx = THEME_ORDER.indexOf(theme);
     setTheme(THEME_ORDER[(idx + 1) % THEME_ORDER.length]);
   };
 
+  const startEditName = () => {
+    setNameDraft(tree.info.name);
+    setEditingName(true);
+  };
+  const commitName = async () => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed || trimmed === tree.info.name) {
+      setEditingName(false);
+      return;
+    }
+    setSavingName(true);
+    try {
+      await api.updateProjectInfo({ name: trimmed });
+      await refreshTree();
+      showToast(`书名已改为「${trimmed}」`);
+      setEditingName(false);
+    } catch (e) {
+      showToast(String(e), "error");
+    } finally {
+      setSavingName(false);
+    }
+  };
+  const run = (action: () => void) => {
+    // Menu actions may open a modal; its own focus initializer will take over
+    // after this deferred restoration when a dialog is mounted.
+    restoreMoreFocus.current = false;
+    setMoreOpen(false);
+    action();
+    requestAnimationFrame(() => {
+      if (!document.querySelector('[role="dialog"][aria-modal="true"]')) {
+        moreButtonRef.current?.focus();
+      }
+    });
+  };
+
+  const views = [
+    { mode: "editor" as const, label: "写作", icon: null },
+    { mode: "map" as const, label: "图谱", icon: <IconMap size={14} /> },
+    {
+      mode: "overview" as const,
+      label: "总览",
+      icon: <IconOverview size={14} />,
+    },
+    {
+      mode: "characters" as const,
+      label: "角色",
+      icon: <IconUsers size={14} />,
+    },
+  ];
+
   return (
     <header className="topbar" data-tauri-drag-region="deep">
       <div className="topbar-left">
         <button
-          className="icon-btn"
-          data-tip={viewMode !== 'editor' ? '返回写作' : '返回首页'}
-          aria-label={viewMode !== 'editor' ? '返回写作' : '返回首页'}
+          className="icon-btn workspace-back"
+          data-tip={viewMode !== "editor" ? "返回写作" : "返回首页"}
+          aria-label={viewMode !== "editor" ? "返回写作" : "返回首页"}
           onClick={onBack}
         >
           <IconBack />
         </button>
-        <span className="topbar-brand">NovelForge</span>
+        <span className="workspace-mark" aria-hidden="true">
+          文
+        </span>
+        <div className="project-identity" data-tauri-drag-region="deep">
+          {editingName ? (
+            <input
+              className="topbar-title-input"
+              value={nameDraft}
+              autoFocus
+              disabled={savingName}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void commitName();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setEditingName(false);
+                }
+              }}
+              onBlur={() => void commitName()}
+              onMouseDown={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <button
+              className="topbar-title-btn"
+              onClick={startEditName}
+              title="点击修改书名"
+            >
+              {tree.info.name}
+            </button>
+          )}
+          <span className="project-meta">
+            {fmt(totalWords)} 字
+            {tree.info.author ? ` · ${tree.info.author}` : ""}
+          </span>
+        </div>
       </div>
 
-      <div className="topbar-center">
-        <span className="topbar-title">《{tree.info.name}》</span>
-        {tree.info.author && <span className="topbar-author">{tree.info.author}</span>}
-        <span className="topbar-words">{fmt(totalWords)} 字</span>
-      </div>
+      <nav className="view-switcher" aria-label="项目视图">
+        {views.map((view) => (
+          <button
+            key={view.mode}
+            className={viewMode === view.mode ? "active" : ""}
+            aria-current={viewMode === view.mode ? "page" : undefined}
+            onClick={() => setViewMode(view.mode)}
+          >
+            {view.icon}
+            <span>{view.label}</span>
+          </button>
+        ))}
+      </nav>
 
       <div className="topbar-right">
         <button
-          className={`icon-btn${viewMode === 'map' ? ' active' : ''}`}
-          data-tip="故事地图（一卷一节点，双击进卷内）"
-          aria-label="故事地图"
-          onClick={() => setViewMode(viewMode === 'map' ? 'editor' : 'map')}
+          className="icon-btn"
+          data-tip="全文搜索 (Ctrl+F)"
+          aria-label="全文搜索"
+          onClick={onOpenSearch}
         >
-          <IconMap />
+          <IconSearch />
         </button>
         <button
-          className={`icon-btn${viewMode === 'overview' ? ' active' : ''}`}
-          data-tip="全书总览（剧情线 / 伏笔 / 结构）"
-          aria-label="全书总览"
-          onClick={() => setViewMode(viewMode === 'overview' ? 'editor' : 'overview')}
-        >
-          <IconOverview />
-        </button>
-        <button
-          className={`icon-btn${viewMode === 'characters' ? ' active' : ''}`}
-          data-tip="角色卡（人设独立编辑 / 搜索筛选）"
-          aria-label="角色卡"
-          onClick={() => setViewMode(viewMode === 'characters' ? 'editor' : 'characters')}
-        >
-          <IconUsers />
-        </button>
-        <span className="topbar-sep" />
-        <button
-          className={`icon-btn${focusMode ? ' active' : ''}`}
-          data-tip={focusMode ? '退出专注模式 (Ctrl+J)' : '专注模式 (Ctrl+J)'}
-          aria-label="专注模式"
+          className={`icon-btn${focusMode ? " active" : ""}`}
+          data-tip={focusMode ? "退出专注模式 (Ctrl+J)" : "专注模式 (Ctrl+J)"}
+          aria-label={focusMode ? "退出专注模式" : "专注模式"}
           onClick={toggleFocusMode}
         >
           <IconFocus />
         </button>
-        <button className="icon-btn" data-tip="全文搜索 (Ctrl+F)" aria-label="全文搜索" onClick={onOpenSearch}>
-          <IconSearch />
+        <button className="toolbar-export" onClick={onOpenExport}>
+          <IconExport size={14} /> <span>导出</span>
         </button>
-        <button className="icon-btn" data-tip="人物 / 地点卡" aria-label="人物地点卡" onClick={onOpenCards}>
-          <IconUsers />
-        </button>
-        <button className="icon-btn" data-tip="码字统计" aria-label="码字统计" onClick={onOpenStats}>
-          <IconChart />
-        </button>
-        <button className="icon-btn" data-tip="随机取名" aria-label="随机取名" onClick={onOpenNames}>
-          <IconDice />
-        </button>
-        <span className="topbar-sep" />
-        <button
-          className="btn btn-ghost tool-text-btn"
-          data-tip="场景写作板（当前章节）"
-          disabled={selectedChapterId === null}
-          onClick={() => setToolModal('scenes')}
-        >
-          场景
-        </button>
-        <button
-          className="btn btn-ghost tool-text-btn"
-          data-tip="连续性检查（死者再现 / 伏笔逾期 / 断档）"
-          onClick={() => setToolModal('continuity')}
-        >
-          连续性
-        </button>
-        <button
-          className="btn btn-ghost tool-text-btn"
-          data-tip="修订工作台（长句 / 重复词 / 跨章替换）"
-          onClick={() => setToolModal('revision')}
-        >
-          修订
-        </button>
-        <button className="icon-btn" data-tip="导出 (TXT / DOCX / MD)" aria-label="导出" onClick={onOpenExport}>
-          <IconExport />
-        </button>
-        <button className="icon-btn" data-tip="备份与恢复" aria-label="备份与恢复" onClick={onOpenBackup}>
-          <IconShield />
-        </button>
-        <button className="btn btn-ghost" onClick={cycleTheme} data-tip="切换主题（深色 / 浅色 / 护眼）">
-          {THEME_LABEL[theme]}
-        </button>
-        <button className="icon-btn" data-tip="显示设置（字体 / 字号 / 行距）" aria-label="显示设置" onClick={onOpenSettings}>
-          <IconSettings />
-        </button>
+
+        <div className="toolbar-more" ref={moreRef}>
+          <button
+            ref={moreButtonRef}
+            className={`icon-btn${moreOpen ? " active" : ""}`}
+            aria-label="更多工具"
+            aria-haspopup="menu"
+            aria-expanded={moreOpen}
+            aria-controls={popoverId}
+            onClick={() => {
+              restoreMoreFocus.current = moreOpen;
+              setMoreOpen((open) => !open);
+            }}
+          >
+            <IconMore />
+          </button>
+          {moreOpen && (
+            <div
+              id={popoverId}
+              className="toolbar-popover"
+              role="menu"
+              aria-label="更多工具"
+            >
+              <div className="toolbar-menu-label">创作工具</div>
+              <button role="menuitem" onClick={() => run(onOpenCards)}>
+                <IconUsers />
+                人物与地点
+              </button>
+              <button role="menuitem" onClick={() => run(onOpenStats)}>
+                <IconChart />
+                码字统计
+              </button>
+              <button role="menuitem" onClick={() => run(onOpenNames)}>
+                <IconDice />
+                随机取名
+              </button>
+              <button
+                disabled={selectedChapterId === null}
+                role="menuitem"
+                onClick={() => run(() => setToolModal("scenes"))}
+              >
+                <IconOverview />
+                场景写作板
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => run(() => setToolModal("continuity"))}
+              >
+                <IconShield />
+                连续性检查
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => run(() => setToolModal("revision"))}
+              >
+                <IconSearch />
+                修订工作台
+              </button>
+              <span className="toolbar-menu-sep" />
+              <div className="toolbar-menu-label">项目</div>
+              <button role="menuitem" onClick={() => run(onOpenBackup)}>
+                <IconShield />
+                备份与恢复
+              </button>
+              <button role="menuitem" onClick={() => run(cycleTheme)}>
+                <span className="menu-symbol" aria-hidden="true">
+                  ◐
+                </span>
+                主题：{THEME_LABEL[theme]}
+              </button>
+              <button role="menuitem" onClick={() => run(onOpenSettings)}>
+                <IconSettings />
+                显示设置
+              </button>
+            </div>
+          )}
+        </div>
         <WindowControls />
       </div>
     </header>

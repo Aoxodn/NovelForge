@@ -1,174 +1,172 @@
-/**
- * useDurableDraft —— 可靠草稿自动保存 Hook（审查 P0-2）。
- *
- * 解决三类问题：
- *   1. 切换实体时旧实体的防抖定时器被 cleanup 取消、编辑状态被覆盖 → 丢草稿；
- *   2. 保存进行中又产生修改，最后几次输入留在内存；
- *   3. 保存异常被静默吞掉，用户无感知。
- *
- * 机制：
- *   - 以「实体 ID + 修订」为单位，切换 ID 前先 flush 上一实体的待存草稿；
- *   - 串行保存循环：保存期间若有新修改（pending），完成后立即再存最新快照；
- *   - 卸载前 flush；
- *   - 保存失败保留 dirty 并暴露持久 error（调用方显示固定错误条，非 3 秒 Toast）。
- */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface DurableDraft<T extends object> {
   draft: T;
-  /** 局部更新或函数式更新，会标记 dirty；保存中调用会登记 pending 追存 */
   setDraft: (patch: Partial<T> | ((prev: T) => T)) => void;
   dirty: boolean;
   saving: boolean;
-  /** 最近一次保存错误（持久，成功或 reset 后清空） */
   error: string | null;
-  /** 立即保存；成功 true，失败 false */
   flush: () => Promise<boolean>;
-  /** 用外部权威数据重置（加载实体后调用） */
   reset: (value: T) => void;
-  /** 失败后重试 */
   retry: () => Promise<boolean>;
 }
 
-/** 串行追存的安全阀，防止极端连续输入下无限循环 */
-const MAX_LOOPS = 20;
+interface Session<T> {
+  id: number | null;
+  value: T;
+  revision: number;
+  savedRevision: number;
+  error: string | null;
+  inFlight: Promise<boolean> | null;
+}
 
+/** Each entity owns its snapshot and save queue. Late responses cannot save
+ * another entity's draft or clear its state. flush joins the existing queue. */
 export function useDurableDraft<T extends object>(
   entityId: number | null,
   initial: T,
   saveFn: (id: number, draft: T) => Promise<unknown>,
   debounceMs = 800,
 ): DurableDraft<T> {
-  const [draft, setDraftState] = useState<T>(initial);
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // 始终最新的引用，避免闭包读到旧值
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
-  const idRef = useRef(entityId);
+  const makeSession = (id: number | null, value: T): Session<T> => ({
+    id,
+    value,
+    revision: 0,
+    savedRevision: 0,
+    error: null,
+    inFlight: null,
+  });
+  const sessionRef = useRef<Session<T>>(makeSession(entityId, initial));
+  const sessions = useRef(new Map<number | null, Session<T>>());
   const saveRef = useRef(saveFn);
   saveRef.current = saveFn;
-  const dirtyRef = useRef(false);
-  const savingRef = useRef(false);
-  const pendingRef = useRef(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  const mounted = useRef(false);
+  const [, render] = useState(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notify = useCallback(() => {
+    if (mounted.current) render((n) => n + 1);
+  }, []);
   const clearTimer = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
   }, []);
 
-  /** 串行保存：保存期间有新改动则追存一轮 */
-  const persist = useCallback(async (id: number, value: T): Promise<boolean> => {
-    let current = value;
-    for (let loop = 0; loop < MAX_LOOPS; loop++) {
-      savingRef.current = true;
-      setSaving(true);
-      setError(null);
-      try {
-        await saveRef.current(id, current);
-      } catch (e) {
-        savingRef.current = false;
-        setSaving(false);
-        setError(String(e));
-        dirtyRef.current = true;
-        setDirty(true);
-        return false;
+  const persist = useCallback(
+    (session: Session<T>): Promise<boolean> => {
+      if (session.inFlight) return session.inFlight;
+      if (session.id === null || session.savedRevision === session.revision) {
+        return Promise.resolve(true);
       }
-      if (pendingRef.current) {
-        pendingRef.current = false;
-        current = draftRef.current;
-        continue;
-      }
-      savingRef.current = false;
-      setSaving(false);
-      dirtyRef.current = false;
-      setDirty(false);
-      return true;
-    }
-    savingRef.current = false;
-    setSaving(false);
-    return true;
-  }, []);
+      const id = session.id;
+      // Assign inFlight before invoking save, including synchronous failures.
+      session.inFlight = Promise.resolve().then(async () => {
+        session.error = null;
+        try {
+          while (session.savedRevision !== session.revision) {
+            const revision = session.revision;
+            const snapshot = session.value;
+            await saveRef.current(id, snapshot);
+            session.savedRevision = revision;
+          }
+          return true;
+        } catch (e) {
+          session.error = String(e);
+          return false;
+        } finally {
+          session.inFlight = null;
+          notify();
+        }
+      });
+      notify();
+      return session.inFlight;
+    },
+    [notify],
+  );
 
-  const flush = useCallback(async () => {
+  const flush = useCallback(() => {
     clearTimer();
-    const id = idRef.current;
-    if (id === null) return true;
-    if (!dirtyRef.current && !pendingRef.current && !savingRef.current) return true;
-    return persist(id, draftRef.current);
+    return persist(sessionRef.current);
   }, [clearTimer, persist]);
 
-  // 切换实体：先 flush 上一实体，再装载新实体
   useEffect(() => {
-    const prevId = idRef.current;
-    if (prevId !== null && prevId !== entityId) {
+    const previous = sessionRef.current;
+    if (previous.id !== entityId) {
       clearTimer();
-      // 用上一实体 id 保存其最后草稿（draftRef 此刻仍是旧实体内容）
-      void persist(prevId, draftRef.current);
+      sessions.current.set(previous.id, previous);
+      void persist(previous);
+      sessionRef.current =
+        sessions.current.get(entityId) ?? makeSession(entityId, initial);
+      notify();
     }
-    idRef.current = entityId;
-    draftRef.current = initial;
-    setDraftState(initial);
-    dirtyRef.current = false;
-    pendingRef.current = false;
-    setDirty(false);
-    setError(null);
-    clearTimer();
+    // initial is a seed, not a reason to replace an edited draft.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entityId]);
+  }, [entityId, clearTimer, persist, notify]);
 
-  // 防抖自动保存
+  const session = sessionRef.current;
   useEffect(() => {
-    if (!dirty || entityId === null) return;
-    timerRef.current = setTimeout(() => {
-      void persist(entityId, draftRef.current);
-    }, debounceMs);
+    if (
+      session.savedRevision === session.revision ||
+      session.id === null ||
+      session.error
+    )
+      return;
+    timer.current = setTimeout(() => void persist(session), debounceMs);
     return clearTimer;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft, dirty, entityId, debounceMs, clearTimer, persist]);
+  }, [
+    session,
+    session.revision,
+    session.savedRevision,
+    session.error,
+    debounceMs,
+    persist,
+    clearTimer,
+  ]);
 
-  // 卸载前尽力 flush
   useEffect(() => {
+    mounted.current = true;
     return () => {
+      mounted.current = false;
       clearTimer();
-      const id = idRef.current;
-      if (id !== null && (dirtyRef.current || pendingRef.current)) {
-        void saveRef.current(id, draftRef.current);
-      }
+      void persist(sessionRef.current);
     };
-  }, [clearTimer]);
+  }, [clearTimer, persist]);
 
-  const setDraft = useCallback((patch: Partial<T> | ((prev: T) => T)) => {
-    setDraftState((prev) => {
-      const next =
-        typeof patch === 'function' ? (patch as (p: T) => T)(prev) : { ...prev, ...patch };
-      draftRef.current = next;
-      if (savingRef.current) pendingRef.current = true;
-      dirtyRef.current = true;
-      setDirty(true);
-      return next;
-    });
-  }, []);
+  const setDraft = useCallback(
+    (patch: Partial<T> | ((prev: T) => T)) => {
+      const current = sessionRef.current;
+      current.value =
+        typeof patch === 'function'
+          ? patch(current.value)
+          : { ...current.value, ...patch };
+      current.revision += 1;
+      current.error = null;
+      notify();
+    },
+    [notify],
+  );
 
   const reset = useCallback(
     (value: T) => {
+      const current = sessionRef.current;
+      // External refreshes must not erase a pending or failed draft.
+      if (current.inFlight || current.savedRevision !== current.revision)
+        return;
       clearTimer();
-      draftRef.current = value;
-      setDraftState(value);
-      dirtyRef.current = false;
-      pendingRef.current = false;
-      setDirty(false);
-      setError(null);
+      current.value = value;
+      current.error = null;
+      notify();
     },
-    [clearTimer],
+    [clearTimer, notify],
   );
 
-  const retry = useCallback(() => flush(), [flush]);
-
-  return { draft, setDraft, dirty, saving, error, flush, reset, retry };
+  return {
+    draft: session.value,
+    setDraft,
+    dirty: session.savedRevision !== session.revision,
+    saving: session.inFlight !== null,
+    error: session.error,
+    flush,
+    reset,
+    retry: flush,
+  };
 }
