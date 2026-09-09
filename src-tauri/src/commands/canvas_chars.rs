@@ -33,6 +33,26 @@ pub fn move_character_node(
     })
 }
 
+/// 从 L1 全书画布移除人物（清 map_x/map_y，不删卡；之后可重新添加）
+#[tauri::command]
+pub fn remove_character_from_canvas(
+    state: State<'_, AppState>,
+    character_id: i64,
+) -> Result<()> {
+    state.with_project(|db| {
+        let n = db.conn.execute(
+            "UPDATE characters SET map_x = NULL, map_y = NULL,
+                 updated_at = datetime('now','localtime')
+             WHERE id = ?1",
+            params![character_id],
+        )?;
+        if n == 0 {
+            return Err(AppError::Msg("人物不存在".into()));
+        }
+        Ok(())
+    })
+}
+
 /// 保存 L2 卷内人物节点坐标（upsert）
 #[tauri::command]
 pub fn set_char_volume_pos(
@@ -57,6 +77,22 @@ pub fn set_char_volume_pos(
              ON CONFLICT(character_id, volume_id)
              DO UPDATE SET map_x = ?3, map_y = ?4",
             params![character_id, volume_id, map_x, map_y],
+        )?;
+        Ok(())
+    })
+}
+
+/// 从 L2 卷内画布移除人物（删除 char_volume_pos 记录，不删卡）
+#[tauri::command]
+pub fn remove_character_from_volume(
+    state: State<'_, AppState>,
+    character_id: i64,
+    volume_id: i64,
+) -> Result<()> {
+    state.with_project(|db| {
+        db.conn.execute(
+            "DELETE FROM char_volume_pos WHERE character_id = ?1 AND volume_id = ?2",
+            params![character_id, volume_id],
         )?;
         Ok(())
     })

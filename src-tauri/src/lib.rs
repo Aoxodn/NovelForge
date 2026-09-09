@@ -151,7 +151,9 @@ pub fn run() {
             commands::chapter_canvas::set_group_edge_bend,
             // 人物图谱（v0.9.13 可编辑人物层）
             commands::canvas_chars::move_character_node,
+            commands::canvas_chars::remove_character_from_canvas,
             commands::canvas_chars::set_char_volume_pos,
+            commands::canvas_chars::remove_character_from_volume,
             commands::canvas_chars::create_character_binding,
             commands::canvas_chars::delete_character_binding,
             commands::canvas_chars::list_character_bindings,

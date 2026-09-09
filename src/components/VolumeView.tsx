@@ -674,6 +674,24 @@ export function VolumeView({
         },
       },
       {
+        label: '从画布移除',
+        onClick: async () => {
+          try {
+            await api.removeCharacterFromVolume(characterId, volumeId);
+            setCharManual((prev) => {
+              const next = new Map(prev);
+              next.delete(characterId);
+              return next;
+            });
+            if (selectedChar === characterId) setSelectedChar(null);
+            await load();
+            showToast('已从画布移除，可随时重新添加');
+          } catch (err) {
+            showToast(String(err), 'error');
+          }
+        },
+      },
+      {
         label: '删除人物',
         danger: true,
         onClick: async () => {

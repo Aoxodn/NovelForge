@@ -646,6 +646,24 @@ export function StoryMap() {
         },
       },
       {
+        label: '从画布移除',
+        onClick: async () => {
+          try {
+            await api.removeCharacterFromCanvas(characterId);
+            setCharManual((prev) => {
+              const next = new Map(prev);
+              next.delete(characterId);
+              return next;
+            });
+            if (focusChar === characterId) setFocusChar(null);
+            setProfiles(await api.listCharacters());
+            showToast('已从画布移除，可随时重新添加');
+          } catch (err) {
+            showToast(String(err), 'error');
+          }
+        },
+      },
+      {
         label: '删除人物',
         danger: true,
         icon: <IconTrash size={14} />,
@@ -653,7 +671,13 @@ export function StoryMap() {
           if (!window.confirm(`确定删除人物「${profile?.name ?? characterId}」？该人物的所有关系、提及记录将一并清除。`)) return;
           try {
             await api.deleteCharacter(characterId);
+            setCharManual((prev) => {
+              const next = new Map(prev);
+              next.delete(characterId);
+              return next;
+            });
             if (focusChar === characterId) setFocusChar(null);
+            setProfiles(await api.listCharacters());
             window.dispatchEvent(new Event('nf:cards-updated'));
             notifyStoryChanged();
           } catch (err) {

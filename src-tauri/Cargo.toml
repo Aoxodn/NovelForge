@@ -1,6 +1,6 @@
 [package]
 name = "novelforge"
-version = "1.1.1"
+version = "1.1.2"
 description = "NovelForge 小说工坊 - 本地优先的小说创作与结构分析软件"
 edition = "2021"
 

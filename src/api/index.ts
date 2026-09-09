@@ -551,9 +551,17 @@ export const setGroupEdgeBend = (edgeId: number, bend: number) =>
 export const moveCharacterNode = (characterId: number, mapX: number, mapY: number) =>
   cmd<void>('move_character_node', { characterId, mapX, mapY });
 
+/** 从 L1 全书画布移除人物（清坐标，不删卡） */
+export const removeCharacterFromCanvas = (characterId: number) =>
+  cmd<void>('remove_character_from_canvas', { characterId });
+
 /** 保存 L2 卷内人物节点坐标（upsert） */
 export const setCharVolumePos = (characterId: number, volumeId: number, mapX: number, mapY: number) =>
   cmd<void>('set_char_volume_pos', { characterId, volumeId, mapX, mapY });
+
+/** 从 L2 卷内画布移除人物 */
+export const removeCharacterFromVolume = (characterId: number, volumeId: number) =>
+  cmd<void>('remove_character_from_volume', { characterId, volumeId });
 
 /** 手动绑定人物→卷 / 人物→章（重复绑定报「已绑定」） */
 export const createCharacterBinding = (opts: {
