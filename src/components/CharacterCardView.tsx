@@ -115,7 +115,7 @@ export function CharacterCardView() {
   }, [selectedId]);
 
   // 可靠草稿：切换角色前自动 flush 上一角色，保存失败显示持久错误条
-  const { draft, setDraft, saving, error, reset, retry } = useDurableDraft<CharDraft>(
+  const { draft, setDraft, dirty, saving, error, reset, retry, flush } = useDurableDraft<CharDraft>(
     selectedId,
     emptyDraft(),
     async (id, d) => {
@@ -381,8 +381,15 @@ export function CharacterCardView() {
                 ))}
               </select>
               <span className="char-save-state">
-                {error ? '保存失败' : saving ? '保存中…' : '已保存'}
+                {error ? '保存失败' : saving ? '保存中…' : dirty ? '未保存' : '已保存'}
               </span>
+              <button
+                className={`btn btn-mini ${dirty ? 'btn-primary' : 'btn-ghost'}`}
+                disabled={!dirty || saving}
+                onClick={() => void flush()}
+              >
+                {saving ? '保存中…' : '保存'}
+              </button>
             </div>
 
             {error && (

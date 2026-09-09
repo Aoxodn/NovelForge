@@ -48,7 +48,7 @@ export function CharacterForm({
   const [excludeWords, setExcludeWords] = useState(initial?.excludeWords?.join('、') ?? '');
   const [faction, setFaction] = useState(initial?.faction ?? '');
   const [alive, setAlive] = useState<'unknown' | 'alive' | 'dead'>(
-    initial?.alive === null ? 'unknown' : initial?.alive ? 'alive' : 'dead',
+    initial?.alive === null || initial?.alive === undefined ? 'unknown' : initial.alive ? 'alive' : 'dead',
   );
   const [importance, setImportance] = useState(initial?.importance ?? 1);
   const [isPov, setIsPov] = useState(initial?.isPov ?? false);
@@ -182,8 +182,6 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
   const [locations, setLocations] = useState<LocationProfile[]>([]);
   const [busy, setBusy] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
-  /** 'new' = 新建表单展开；null = 列表态 */
-  const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [editingLocation, setEditingLocation] = useState<number | null>(null);
 
   // 搜索 / 排序 / 筛选
@@ -209,23 +207,6 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
   }, [refresh]);
 
   const notify = () => window.dispatchEvent(new Event('nf:cards-updated'));
-
-  const submitCharacter = async (v: {
-    name: string; aliases: string[]; role: string; notes: string; excludeWords: string[]; meta: CharacterMeta;
-  }) => {
-    setBusy(true);
-    try {
-      await api.addCharacter(v.name, v.aliases, v.role, v.notes, v.excludeWords, v.meta);
-      showToast(`人物「${v.name}」已创建`);
-      setEditing(null);
-      await refresh();
-      notify();
-    } catch (e) {
-      showToast(String(e), 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const submitLocation = async (v: { name: string; notes: string }) => {
     setBusy(true);
@@ -350,10 +331,10 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
     <Modal title="人物 / 地点" onClose={onClose} width={800}>
       <div className="cards-toolbar">
         <div className="tabs">
-          <button className={`tab${tab === 'characters' ? ' active' : ''}`} onClick={() => { setTab('characters'); setEditing(null); setEditingLocation(null); }}>
+          <button className={`tab${tab === 'characters' ? ' active' : ''}`} onClick={() => { setTab('characters'); setEditingLocation(null); }}>
             <IconUsers /> 人物<em>{characters.length}</em>
           </button>
-          <button className={`tab${tab === 'locations' ? ' active' : ''}`} onClick={() => { setTab('locations'); setEditing(null); setEditingLocation(null); }}>
+          <button className={`tab${tab === 'locations' ? ' active' : ''}`} onClick={() => { setTab('locations'); setEditingLocation(null); }}>
             <IconMapPin /> 地点<em>{locations.length}</em>
           </button>
         </div>
@@ -364,22 +345,35 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
               <IconRefresh size={14} /> {rebuilding ? '重建中…' : '重建统计'}
             </button>
           )}
-          <button className="btn btn-primary" onClick={() => { if (tab === 'characters') setEditing('new'); else setEditingLocation(-1); }}>
+          <button className="btn btn-primary" onClick={() => {
+            if (tab === 'characters') {
+              void (async () => {
+                try {
+                  const c = await api.addCharacter('新角色', [], '配角', '');
+                  await refresh();
+                  notify();
+                  focusCharacter(c.id);
+                  onClose();
+                } catch (e) {
+                  showToast(String(e), 'error');
+                }
+              })();
+            } else {
+              setEditingLocation(-1);
+            }
+          }}>
             <IconPlus size={14} /> 新建{tab === 'characters' ? '人物' : '地点'}
           </button>
         </div>
       </div>
 
-      {/* 新建表单 */}
-      {editing === 'new' && (
-        <CharacterForm onSubmit={(v) => void submitCharacter(v)} onCancel={() => setEditing(null)} busy={busy} />
-      )}
+      {/* 新建地点表单 */}
       {editingLocation === -1 && (
         <LocationForm onSubmit={(v) => void submitLocation(v)} onCancel={() => setEditingLocation(null)} busy={busy} />
       )}
 
       {/* 人物：搜索 / 排序 / 筛选栏 */}
-      {tab === 'characters' && editing !== 'new' && (
+      {tab === 'characters' && (
         <div className="cards-filter-bar">
           <div className="cards-search">
             <IconSearch size={14} />
@@ -418,7 +412,7 @@ export function CardsModal({ onClose }: { onClose: () => void }) {
       )}
 
       {/* 列表 */}
-      {tab === 'characters' && editing !== 'new' ? (
+      {tab === 'characters' ? (
         filteredCharacters.length === 0 ? (
           <div className="cards-empty">
             <p>{hasActiveFilter ? '没有符合筛选条件的人物。' : '还没有人物卡。点击「新建人物」开始。'}</p>
