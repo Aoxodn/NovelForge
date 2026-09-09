@@ -8,6 +8,7 @@ use std::path::Path;
 pub fn open_global_db(data_dir: &Path) -> Result<Connection> {
     std::fs::create_dir_all(data_dir)?;
     let conn = Connection::open(data_dir.join("app.db"))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.execute_batch(
         "

@@ -254,7 +254,7 @@ impl FpIndex {
         for (idx, n_shared) in shared {
             let denom = self.para_counts[idx as usize].max(para_fps.len()) as f32;
             let ratio = n_shared as f32 / denom;
-            if ratio >= 0.8 && best.map_or(true, |(br, _)| ratio > br) {
+            if ratio >= 0.8 && best.is_none_or(|(br, _)| ratio > br) {
                 best = Some((ratio, idx));
             }
         }
@@ -352,7 +352,6 @@ fn mark_duplicates(
 mod tests {
     use super::*;
     use crate::import::ImportedParagraph;
-    use std::collections::HashMap;
 
     fn para(text: &str) -> ImportedParagraph {
         ImportedParagraph {
@@ -481,7 +480,7 @@ mod tests {
         .chain(
             fake_body("全新", 5)
                 .split('\n')
-                .map(|l| para(l)),
+                .map(para),
         )
         .collect::<Vec<_>>();
 
@@ -605,21 +604,31 @@ pub fn import_confirm(
     volume_id: Option<i64>,
     new_volume_title: Option<String>,
 ) -> Result<ImportResult> {
+    // 审查 P1-7：先克隆缓存做校验，不提前消费；任何参数 / 落库失败都保留缓存，
+    // 用户无需重新分析。
     let cached = state
         .import_cache
-        .remove(&analysis_id)
+        .get_clone(&analysis_id)
         .ok_or_else(|| AppError::Msg("导入会话已过期或已使用，请重新选择文件".into()))?;
 
     let n_blocks = cached.blocks.len();
     if excluded.iter().chain(discarded.iter()).any(|&i| i >= n_blocks) {
         return Err(AppError::Msg("导入参数无效（边界索引越界）".into()));
     }
+    // 组装章节在事务前完成（纯内存，失败不写库、不消费缓存）
+    let entries = detector::assemble(&cached.paras, &cached.blocks, &excluded, &discarded);
+    if entries.is_empty() {
+        return Err(AppError::Msg("没有可导入的章节".into()));
+    }
 
-    state.with_project(|db| {
-        // 1) 确定目标卷
+    let result = state.with_project(|db| {
+        // 建卷 + 写章全部放进同一个事务：任何一步失败整体回滚，不留空卷
+        let tx = db.conn.unchecked_transaction()?;
+
+        // 1) 确定目标卷（事务内创建）
         let vid = match volume_id {
             Some(v) => {
-                let exists: i64 = db.conn.query_row(
+                let exists: i64 = tx.query_row(
                     "SELECT COUNT(*) FROM volumes WHERE id = ?1",
                     params![v],
                     |r| r.get(0),
@@ -634,33 +643,26 @@ pub fn import_confirm(
                     .map(|t| t.trim().to_string())
                     .filter(|t| !t.is_empty())
                     .unwrap_or_else(|| cached.file_name.clone());
-                let next: i32 = db.conn.query_row(
-                    "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM volumes",
-                    [],
-                    |r| r.get(0),
-                )?;
-                db.conn.execute(
+                let next: i32 =
+                    tx.query_row("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM volumes", [], |r| {
+                        r.get(0)
+                    })?;
+                tx.execute(
                     "INSERT INTO volumes (title, sort_order) VALUES (?1, ?2)",
                     params![title, next],
                 )?;
-                db.conn.last_insert_rowid()
+                tx.last_insert_rowid()
             }
         };
 
-        // 2) 组装章节（excluded 并入前一章；discarded 丢弃重复内容）
-        let entries = detector::assemble(&cached.paras, &cached.blocks, &excluded, &discarded);
-        if entries.is_empty() {
-            return Err(AppError::Msg("没有可导入的章节".into()));
-        }
-
-        // 3) 事务批量写入
-        let tx = db.conn.unchecked_transaction()?;
+        // 2) 章节起始序号
         let base: i32 = tx.query_row(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chapters WHERE volume_id = ?1 AND deleted_at IS NULL",
             params![vid],
             |r| r.get(0),
         )?;
 
+        // 3) 批量写入章节
         let mut total_words: i64 = 0;
         for (i, (title, content)) in entries.iter().enumerate() {
             let stats = text::count_text(content);
@@ -678,5 +680,16 @@ pub fn import_confirm(
             chapter_count: entries.len() as i64,
             word_count: total_words,
         })
-    })
+    })?;
+
+    // 仅在提交成功后消费缓存（失败保留，可重试无需重新分析）
+    state.import_cache.remove(&analysis_id);
+    Ok(result)
+}
+
+/// 取消导入：显式释放分析缓存，释放大文本占用的内存（审查 P1-7）
+#[tauri::command]
+pub fn import_cancel(state: State<'_, AppState>, analysis_id: String) -> Result<()> {
+    state.import_cache.cancel(&analysis_id);
+    Ok(())
 }

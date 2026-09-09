@@ -11,6 +11,7 @@ use regex::Regex;
 
 /// 统计 patterns 在 content 中的不重叠出现次数。
 /// patterns 为空或 content 为空时恒为 0（不构建正则）。
+#[allow(dead_code)]
 pub fn count_occurrences(content: &str, patterns: &[String]) -> usize {
     let mut pats: Vec<&str> = patterns
         .iter()
@@ -39,6 +40,7 @@ pub fn count_occurrences(content: &str, patterns: &[String]) -> usize {
 /// 多字名（≥2字）无需调用此函数，精确匹配已零误判。
 ///
 /// exclude_words 为空时退化为普通 [`count_occurrences`]。
+#[allow(dead_code)]
 pub fn count_occurrences_with_exclusions(
     content: &str,
     patterns: &[String],

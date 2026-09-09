@@ -4,7 +4,7 @@
  * 并挂载全局快捷键（Ctrl+N / Ctrl+F）、窗口关闭前自动保存冲刷、
  * 30 分钟周期自动备份（文档第六十五节）。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEditorStore } from '../store/editorStore';
 import { useAppStore } from '../store/appStore';
@@ -24,6 +24,10 @@ import { NameGeneratorModal } from './NameGeneratorModal';
 import { StoryMap } from './StoryMap';
 import { OverviewView } from './OverviewView';
 import { CharacterCardView } from './CharacterCardView';
+import { SaveFailureDialog } from './SaveFailureDialog';
+import { ContinuityModal } from './tools/ContinuityModal';
+import { RevisionModal } from './tools/RevisionModal';
+import { SceneBoardModal } from './tools/SceneBoardModal';
 
 /** 自动备份周期（文档：每 30 分钟） */
 const AUTO_BACKUP_INTERVAL_MS = 30 * 60 * 1000;
@@ -38,13 +42,30 @@ export function ProjectView() {
   const [showNames, setShowNames] = useState(false);
   /** true = 正在播放「合上书本」退场动画 */
   const [closing, setClosing] = useState(false);
+  /** 保存失败阻断对话框：null=不显示；'back'=返回首页流程；'close'=关窗流程 */
+  const [saveBlock, setSaveBlock] = useState<{ reason: string; flow: 'back' | 'close' } | null>(null);
+  /** 关窗流程持有的窗口句柄（强制退出时 destroy） */
+  const winRef = useRef<Awaited<ReturnType<typeof getCurrentWindow>> | null>(null);
   const projectPath = useAppStore((s) => s.tree?.projectPath ?? null);
   const closeProject = useAppStore((s) => s.closeProject);
   const focusMode = useAppStore((s) => s.focusMode);
   const viewMode = useAppStore((s) => s.viewMode);
+  const toolModal = useAppStore((s) => s.toolModal);
+  const setToolModal = useAppStore((s) => s.setToolModal);
+  const selectedChapterId = useAppStore((s) => s.selectedChapterId);
+  const currentChapterTitle = useAppStore((s) => {
+    const hit = s.tree?.chapters.find((c) => c.id === s.selectedChapterId);
+    return hit?.title ?? '';
+  });
+
+  /** 真正执行退出项目（关书动画 → 清空 → 关闭） */
+  const doExitProject = async () => {
+    useEditorStore.getState().clear();
+    await closeProject();
+  };
 
   /** 返回：在故事地图 / 总览等视图时先回写作界面（避免误退项目），
-   *  已在写作界面才走「关书动画 → 退出项目」流程 */
+   *  已在写作界面才走「关书动画 → 退出项目」流程；保存失败必须阻断 */
   const handleBack = () => {
     if (closing) return;
     if (useAppStore.getState().viewMode !== 'editor') {
@@ -53,16 +74,23 @@ export function ProjectView() {
     }
     setClosing(true);
     setTimeout(async () => {
-      // 返回前确保未保存内容落库
       const ed = useEditorStore.getState();
-      if (ed.chapterId !== null && ed.dirty) await ed.save(false);
-      ed.clear();
-      await closeProject();
+      if (ed.chapterId !== null && ed.dirty) {
+        try {
+          await ed.save(false);
+        } catch (e) {
+          // 保存失败：停止退出，弹出阻断对话框
+          setClosing(false);
+          setSaveBlock({ reason: String(e), flow: 'back' });
+          return;
+        }
+      }
+      await doExitProject();
     }, 320);
   };
 
-  // 打开项目后重建人物/地点出场统计（V3 迁移后 mentions 为空；
-  // 后台线程精确匹配，完成后广播事件刷新信息面板与卡片）
+  // 打开项目后做增量提及统计（审查 P1-3）：后端只重算 content_hash 过期 / 缺失
+  // 的章节，已索引章节不重扫；后台线程计算，完成后广播事件刷新面板与卡片。
   useEffect(() => {
     if (!projectPath) return;
     let cancelled = false;
@@ -107,8 +135,7 @@ export function ProjectView() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // 窗口关闭前冲刷未保存内容（防崩溃丢字）；保存失败也放行关闭，
-  // 内容已在 500ms 防抖周期内尽量落库
+  // 窗口关闭前冲刷未保存内容（防崩溃丢字）；保存失败时阻断关闭并弹出抢救对话框
   useEffect(() => {
     // 非 Tauri 环境（浏览器预览）无窗口 API，跳过
     let win: ReturnType<typeof getCurrentWindow>;
@@ -117,14 +144,17 @@ export function ProjectView() {
     } catch {
       return;
     }
+    winRef.current = win;
     const promise = win.onCloseRequested(async (event) => {
       const ed = useEditorStore.getState();
       if (ed.chapterId !== null && ed.dirty) {
         event.preventDefault();
         try {
           await ed.save(false);
-        } finally {
           await win.destroy();
+        } catch (e) {
+          // 保存失败：不销毁窗口，交给用户选择重试/导出/强制退出
+          setSaveBlock({ reason: String(e), flow: 'close' });
         }
       }
     });
@@ -187,6 +217,52 @@ export function ProjectView() {
       {showCards && <CardsModal onClose={() => setShowCards(false)} />}
       {showStats && <StatsModal onClose={() => setShowStats(false)} />}
       {showNames && <NameGeneratorModal onClose={() => setShowNames(false)} />}
+      {toolModal === 'continuity' && (
+        <ContinuityModal onClose={() => setToolModal('none')} />
+      )}
+      {toolModal === 'revision' && (
+        <RevisionModal onClose={() => setToolModal('none')} />
+      )}
+      {toolModal === 'scenes' && selectedChapterId !== null && (
+        <SceneBoardModal
+          chapterId={selectedChapterId}
+          chapterTitle={currentChapterTitle}
+          onClose={() => setToolModal('none')}
+        />
+      )}
+      {saveBlock && (
+        <SaveFailureDialog
+          reason={saveBlock.reason}
+          title={useEditorStore.getState().title}
+          content={useEditorStore.getState().content}
+          onCancel={() => setSaveBlock(null)}
+          onRetry={async () => {
+            try {
+              await useEditorStore.getState().save(false);
+            } catch {
+              return false;
+            }
+            // 保存成功：继续原本被阻断的流程
+            const flow = saveBlock.flow;
+            setSaveBlock(null);
+            if (flow === 'close') {
+              await winRef.current?.destroy();
+            } else {
+              await doExitProject();
+            }
+            return true;
+          }}
+          onForceExit={async () => {
+            const flow = saveBlock.flow;
+            setSaveBlock(null);
+            if (flow === 'close') {
+              await winRef.current?.destroy();
+            } else {
+              await doExitProject();
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

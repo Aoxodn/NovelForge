@@ -1,12 +1,22 @@
-/** 无边框窗口控制按钮：最小化 / 最大化还原 / 关闭（右上角，Windows 风格） */
+/** 无边框窗口控制按钮：最小化 / 最大化还原 / 关闭（右上角，Windows 风格）。
+ *  仅 Windows 使用自定义无边框标题栏；macOS / Linux 走原生标题栏，直接不渲染（审查跨平台项）。 */
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { IconClose, IconMaximize, IconMinimize, IconRestore } from './icons';
 
+function isWindows(): boolean {
+  if (typeof navigator === 'undefined') return true;
+  const p = (navigator.platform || '').toLowerCase();
+  const ua = (navigator.userAgent || '').toLowerCase();
+  return p.includes('win') || ua.includes('windows');
+}
+
 export function WindowControls() {
   const [maximized, setMaximized] = useState(false);
+  const [windows] = useState(isWindows);
 
   useEffect(() => {
+    if (!windows) return;
     // 非 Tauri 环境（如浏览器直接预览）下窗口 API 不可用，跳过即可
     let win: ReturnType<typeof getCurrentWindow>;
     try {
@@ -25,6 +35,8 @@ export function WindowControls() {
       });
     return () => unlisten?.();
   }, []);
+
+  if (!windows) return null;
 
   return (
     <div className="win-controls">

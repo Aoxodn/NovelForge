@@ -155,9 +155,7 @@ fn person_name(rng: &mut Rng, opts: &NameOptions) -> String {
                 _ => {
                     if gender == "female" {
                         rng.pick(JP_FEMALE_GIVEN).to_string()
-                    } else if gender == "male" {
-                        rng.pick(JP_MALE_GIVEN).to_string()
-                    } else if rng.chance(0.5) {
+                    } else if gender == "male" || rng.chance(0.5) {
                         rng.pick(JP_MALE_GIVEN).to_string()
                     } else {
                         rng.pick(JP_FEMALE_GIVEN).to_string()
@@ -176,9 +174,7 @@ fn person_name(rng: &mut Rng, opts: &NameOptions) -> String {
                 _ => {
                     if gender == "female" {
                         rng.pick(WEST_FEMALE_GIVEN).to_string()
-                    } else if gender == "male" {
-                        rng.pick(WEST_MALE_GIVEN).to_string()
-                    } else if rng.chance(0.5) {
+                    } else if gender == "male" || rng.chance(0.5) {
                         rng.pick(WEST_MALE_GIVEN).to_string()
                     } else {
                         rng.pick(WEST_FEMALE_GIVEN).to_string()
@@ -190,9 +186,7 @@ fn person_name(rng: &mut Rng, opts: &NameOptions) -> String {
         _ => {
             let chars = if gender == "female" {
                 FEMALE_CHARS
-            } else if gender == "male" {
-                MALE_CHARS
-            } else if rng.chance(0.5) {
+            } else if gender == "male" || rng.chance(0.5) {
                 MALE_CHARS
             } else {
                 FEMALE_CHARS

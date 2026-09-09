@@ -9,6 +9,7 @@ use crate::names::{self, NameOptions};
 /// genre 仅组合类使用（题材词典键，缺省玄幻；未建设题材返回空列表）；
 /// 其余参数仅 person 使用（国家 / 性别 / 姓数 / 指定姓氏与名字）。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn generate_names(
     kind: String,
     count: Option<usize>,

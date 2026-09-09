@@ -36,6 +36,8 @@ interface AppStore {
   charFocusId: number | null;
   /** 请求故事地图定位高亮某卷节点（InfoPanel / 总览跳转用，消费后自清） */
   mapFocusNodeId: number | null;
+  /** 全局写作工具弹窗（审查新增功能）：连续性检查 / 修订工作台 / 场景板 */
+  toolModal: 'none' | 'continuity' | 'revision' | 'scenes';
   /** 今日累计码字（打开项目时拉取，保存后由后端权威值刷新） */
   todayWords: number;
   toast: { text: string; kind: 'info' | 'error' } | null;
@@ -53,6 +55,8 @@ interface AppStore {
   refreshTree: () => Promise<void>;
   selectChapter: (id: number | null) => void;
   setViewMode: (m: 'editor' | 'map' | 'overview' | 'characters') => void;
+  /** 打开 / 关闭全局写作工具弹窗 */
+  setToolModal: (m: 'none' | 'continuity' | 'revision' | 'scenes') => void;
   /** 切到角色卡并定位高亮某角色 */
   focusCharacter: (characterId: number) => void;
   clearCharFocus: () => void;
@@ -108,6 +112,34 @@ function persistEditorSettings(s: EditorSettings) {
   localStorage.setItem(EDITOR_KEY, JSON.stringify(s));
 }
 
+// ---------- 目录树静默刷新：合并 + 请求序号防竞态（审查 P0-3） ----------
+let treeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let treeRequestSeq = 0;
+
+async function fetchTreeOnce() {
+  const seq = ++treeRequestSeq;
+  try {
+    const tree = await api.getCurrentProjectTree();
+    // 响应到达时若已有更新的请求发起、或项目已关闭/切换，则丢弃本次迟到结果
+    if (seq !== treeRequestSeq) return;
+    const current = useAppStore.getState().tree;
+    if (!current || current.projectPath !== tree.projectPath) return;
+    useAppStore.setState({ tree });
+  } catch {
+    /* 只读刷新失败保持旧树，不打断写作 */
+  }
+}
+
+/** 300ms 内的多次刷新合并为一次只读查询 */
+function scheduleTreeRefresh() {
+  if (!useAppStore.getState().tree) return;
+  if (treeRefreshTimer) clearTimeout(treeRefreshTimer);
+  treeRefreshTimer = setTimeout(() => {
+    treeRefreshTimer = null;
+    void fetchTreeOnce();
+  }, 300);
+}
+
 export const useAppStore = create<AppStore>((set, get) => ({
   tree: null,
   selectedChapterId: null,
@@ -118,6 +150,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   viewMode: 'editor',
   mapFocusNodeId: null,
   charFocusId: null,
+  toolModal: 'none',
   todayWords: 0,
   toast: null,
   pendingImportPath: null,
@@ -135,7 +168,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   openProject: async (path) => {
     try {
+      // 使任何在途的旧项目只读刷新失效，防止迟到响应覆盖新项目
+      treeRequestSeq++;
+      if (treeRefreshTimer) {
+        clearTimeout(treeRefreshTimer);
+        treeRefreshTimer = null;
+      }
       const tree = await api.openProject(path);
+      treeRequestSeq++;
       set({ tree, selectedChapterId: null });
       // 今日码字：打开项目时拉取一次，之后由保存回包刷新
       void api
@@ -150,26 +190,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   closeProject: async () => {
+    // 关闭：作废在途刷新，防止 close 后被迟到的只读结果重新装回旧项目
+    treeRequestSeq++;
+    if (treeRefreshTimer) {
+      clearTimeout(treeRefreshTimer);
+      treeRefreshTimer = null;
+    }
     await api.closeProject();
-    set({ tree: null, selectedChapterId: null, todayWords: 0, viewMode: 'editor', mapFocusNodeId: null, charFocusId: null });
+    set({ tree: null, selectedChapterId: null, todayWords: 0, viewMode: 'editor', mapFocusNodeId: null, charFocusId: null, toolModal: 'none' });
   },
 
   refreshTree: async () => {
-    // 静默刷新：失败不打断写作（保持旧树）；项目已关闭时直接跳过，
-    // 避免在途保存回调与关闭项目的竞态导致崩溃
-    const current = get().tree;
-    if (!current) return;
-    try {
-      const tree = await api.openProject(current.projectPath);
-      set({ tree });
-    } catch {
-      /* 项目文件被外部移动等异常场景，忽略 */
-    }
+    // 静默刷新：使用只读命令复用现有连接（不重开数据库，避免与关闭/切换项目竞态）。
+    // requestId 保证迟到响应不会覆盖更新的项目；合并 300ms 内的连续刷新请求。
+    scheduleTreeRefresh();
   },
 
   selectChapter: (id) => set({ selectedChapterId: id }),
 
   setViewMode: (m) => set({ viewMode: m }),
+  setToolModal: (m) => set({ toolModal: m }),
 
   focusMapNode: (volumeId) =>
     set({ viewMode: 'map', mapFocusNodeId: volumeId }),

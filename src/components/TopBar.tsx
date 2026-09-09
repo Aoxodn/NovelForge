@@ -29,6 +29,8 @@ export function TopBar({ onBack, onOpenSettings, onOpenExport, onOpenSearch, onO
   const toggleFocusMode = useAppStore((s) => s.toggleFocusMode);
   const viewMode = useAppStore((s) => s.viewMode);
   const setViewMode = useAppStore((s) => s.setViewMode);
+  const setToolModal = useAppStore((s) => s.setToolModal);
+  const selectedChapterId = useAppStore((s) => s.selectedChapterId);
   // 全书字数滚动（保存后微反馈）
   const totalWords = useCountUp(tree.stats.totalWordCount);
 
@@ -102,6 +104,29 @@ export function TopBar({ onBack, onOpenSettings, onOpenExport, onOpenSearch, onO
         </button>
         <button className="icon-btn" data-tip="随机取名" aria-label="随机取名" onClick={onOpenNames}>
           <IconDice />
+        </button>
+        <span className="topbar-sep" />
+        <button
+          className="btn btn-ghost tool-text-btn"
+          data-tip="场景写作板（当前章节）"
+          disabled={selectedChapterId === null}
+          onClick={() => setToolModal('scenes')}
+        >
+          场景
+        </button>
+        <button
+          className="btn btn-ghost tool-text-btn"
+          data-tip="连续性检查（死者再现 / 伏笔逾期 / 断档）"
+          onClick={() => setToolModal('continuity')}
+        >
+          连续性
+        </button>
+        <button
+          className="btn btn-ghost tool-text-btn"
+          data-tip="修订工作台（长句 / 重复词 / 跨章替换）"
+          onClick={() => setToolModal('revision')}
+        >
+          修订
         </button>
         <button className="icon-btn" data-tip="导出 (TXT / DOCX / MD)" aria-label="导出" onClick={onOpenExport}>
           <IconExport />

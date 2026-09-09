@@ -11,6 +11,7 @@ use crate::commands::AppState;
 use crate::error::{AppError, Result};
 use crate::models::SearchHit;
 use regex::Regex;
+use rusqlite::params;
 use tauri::State as TauriState;
 
 /// 每章最多返回的匹配数
@@ -41,18 +42,42 @@ pub async fn search_project(
         None
     };
 
-    // 逐章读取正文（同步完成后再进入后台线程，避免跨 await 持锁）
+    // 逐章读取正文（同步完成后再进入后台线程，避免跨 await 持锁）。
+    // 审查 P1-6：普通文本搜索用 LIKE 下推，只把可能命中的章读入内存，
+    // 避免每次按键都把全书正文复制进 Vec<String>；正则无法下推才全量读取。
     let rows: Vec<(i64, String, String, String)> = state.with_project(|db| {
-        let mut stmt = db.conn.prepare(
-            "SELECT c.id, c.title, v.title, c.content
-             FROM chapters c JOIN volumes v ON c.volume_id = v.id
-             WHERE c.deleted_at IS NULL
-             ORDER BY v.sort_order, c.sort_order, c.id",
-        )?;
         let mut out = Vec::new();
-        let mut rows = stmt.query([])?;
-        while let Some(r) = rows.next()? {
-            out.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
+        if use_regex {
+            let mut stmt = db.conn.prepare(
+                "SELECT c.id, c.title, v.title, c.content
+                 FROM chapters c JOIN volumes v ON c.volume_id = v.id
+                 WHERE c.deleted_at IS NULL
+                 ORDER BY v.sort_order, c.sort_order, c.id",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(r) = rows.next()? {
+                out.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
+            }
+        } else {
+            // 转义 LIKE 通配符 % _ 与转义符本身
+            let mut like = String::with_capacity(query.len() + 2);
+            for ch in query.chars() {
+                if ch == '%' || ch == '_' || ch == '\\' {
+                    like.push('\\');
+                }
+                like.push(ch);
+            }
+            let pattern = format!("%{like}%");
+            let mut stmt = db.conn.prepare(
+                "SELECT c.id, c.title, v.title, c.content
+                 FROM chapters c JOIN volumes v ON c.volume_id = v.id
+                 WHERE c.deleted_at IS NULL AND c.content LIKE ?1 ESCAPE '\\'
+                 ORDER BY v.sort_order, c.sort_order, c.id",
+            )?;
+            let mut rows = stmt.query(params![pattern])?;
+            while let Some(r) = rows.next()? {
+                out.push((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
+            }
         }
         Ok(out)
     })?;

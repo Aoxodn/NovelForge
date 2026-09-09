@@ -110,7 +110,7 @@ fn build_txt(book: &str, author: &str, chapters: &[ExportChapter]) -> String {
     if !author.is_empty() {
         out.push_str(&format!("作者：{author}\n"));
     }
-    out.push_str("\n");
+    out.push('\n');
 
     let mut last_volume: Option<&str> = None;
     for ch in chapters {

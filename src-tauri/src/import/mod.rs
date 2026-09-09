@@ -23,6 +23,7 @@ use std::time::Instant;
 
 /// 从文档解析出的段落。
 /// TXT/MD 只有文本；DOCX 额外携带格式特征，供章节识别置信度加成。
+#[derive(Clone)]
 pub struct ImportedParagraph {
     pub text: String,
     /// 是否加粗（段落内任一 run 加粗即视为加粗）
@@ -35,7 +36,8 @@ pub struct ImportedParagraph {
     pub font_size: Option<f32>,
 }
 
-/// 一次导入分析的结果缓存（confirm 时消费删除）
+/// 一次导入分析的结果缓存（commit 成功后才消费删除）
+#[derive(Clone)]
 pub struct CachedAnalysis {
     pub file_name: String,
     pub paras: Vec<ImportedParagraph>,
@@ -79,5 +81,15 @@ impl ImportCache {
 
     pub fn remove(&self, id: &str) -> Option<CachedAnalysis> {
         self.map.lock().unwrap().remove(id)
+    }
+
+    /// 取一份缓存克隆而不移除（用于先校验 / 落库成功后再 remove）
+    pub fn get_clone(&self, id: &str) -> Option<CachedAnalysis> {
+        self.map.lock().unwrap().get(id).cloned()
+    }
+
+    /// 取消导入：显式释放该会话缓存（审查 P1-7）
+    pub fn cancel(&self, id: &str) -> bool {
+        self.map.lock().unwrap().remove(id).is_some()
     }
 }

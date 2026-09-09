@@ -429,6 +429,166 @@ const MIGRATIONS: &[(i64, &str)] = &[(
     "
     ALTER TABLE characters ADD COLUMN exclude_words TEXT NOT NULL DEFAULT '[]';
     ",
+),
+(
+    14,
+    // V14（审查 P1-1 / P2-2）：
+    //   ① 补齐外键级联扫描所需索引；
+    //   ② 用触发器在数据库层兜底「章间连线两端同卷」「章节与小节同卷」
+    //      「伏笔章级锚点属于对应卷」，防止未来其他命令写入非法数据。
+    "
+    -- ① 缺失索引：伏笔锚点 / 组边到章 / 卷内人物坐标按卷查询
+    CREATE INDEX IF NOT EXISTS idx_edges_from_ch ON story_edges(from_chapter_id);
+    CREATE INDEX IF NOT EXISTS idx_edges_to_ch   ON story_edges(to_chapter_id);
+    CREATE INDEX IF NOT EXISTS idx_gedges_to_ch  ON group_edges(to_chapter);
+    CREATE INDEX IF NOT EXISTS idx_charvolpos_vol ON char_volume_pos(volume_id);
+
+    -- ② 章间连线：两端必须都是未删章节且同卷
+    DROP TRIGGER IF EXISTS trg_chedge_ins;
+    CREATE TRIGGER trg_chedge_ins BEFORE INSERT ON chapter_edges
+    WHEN NOT EXISTS (
+        SELECT 1 FROM chapters a JOIN chapters b
+        WHERE a.id = NEW.from_chapter AND b.id = NEW.to_chapter
+          AND a.deleted_at IS NULL AND b.deleted_at IS NULL
+          AND a.volume_id = b.volume_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, '章间连线两端必须是同卷且存在的章节');
+    END;
+
+    DROP TRIGGER IF EXISTS trg_chedge_upd;
+    CREATE TRIGGER trg_chedge_upd BEFORE UPDATE ON chapter_edges
+    WHEN NOT EXISTS (
+        SELECT 1 FROM chapters a JOIN chapters b
+        WHERE a.id = NEW.from_chapter AND b.id = NEW.to_chapter
+          AND a.deleted_at IS NULL AND b.deleted_at IS NULL
+          AND a.volume_id = b.volume_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, '章间连线两端必须是同卷且存在的章节');
+    END;
+
+    -- 章节归入小节：小节必须与章节同卷
+    DROP TRIGGER IF EXISTS trg_ch_group_ins;
+    CREATE TRIGGER trg_ch_group_ins BEFORE INSERT ON chapters
+    WHEN NEW.group_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM chapter_groups g
+        WHERE g.id = NEW.group_id AND g.volume_id = NEW.volume_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, '小节必须与章节属于同一卷');
+    END;
+
+    DROP TRIGGER IF EXISTS trg_ch_group_upd;
+    CREATE TRIGGER trg_ch_group_upd BEFORE UPDATE OF group_id, volume_id ON chapters
+    WHEN NEW.group_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM chapter_groups g
+        WHERE g.id = NEW.group_id AND g.volume_id = NEW.volume_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, '小节必须与章节属于同一卷');
+    END;
+
+    -- 伏笔章级锚点：埋设章必须属于 from_node 卷，回收章必须属于 to_node 卷
+    DROP TRIGGER IF EXISTS trg_edge_anchor_ins;
+    CREATE TRIGGER trg_edge_anchor_ins BEFORE INSERT ON story_edges
+    WHEN (NEW.from_chapter_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM chapters c WHERE c.id = NEW.from_chapter_id AND c.volume_id = NEW.from_node))
+       OR (NEW.to_chapter_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM chapters c WHERE c.id = NEW.to_chapter_id AND c.volume_id = NEW.to_node))
+    BEGIN
+        SELECT RAISE(ABORT, '伏笔章级锚点必须属于对应卷');
+    END;
+
+    DROP TRIGGER IF EXISTS trg_edge_anchor_upd;
+    CREATE TRIGGER trg_edge_anchor_upd BEFORE UPDATE ON story_edges
+    WHEN (NEW.from_chapter_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM chapters c WHERE c.id = NEW.from_chapter_id AND c.volume_id = NEW.from_node))
+       OR (NEW.to_chapter_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM chapters c WHERE c.id = NEW.to_chapter_id AND c.volume_id = NEW.to_node))
+    BEGIN
+        SELECT RAISE(ABORT, '伏笔章级锚点必须属于对应卷');
+    END;
+    ",
+),
+(
+    15,
+    // V15（审查 P1-3 / P1-5）：提及统计增量索引状态。
+    //   记录每章上次纳入统计时的内容指纹；rebuild 只处理指纹过期 / 缺失的章，
+    //   打开项目不再无条件全书重扫。章节彻底删除时由外键级联清掉对应行。
+    "
+    CREATE TABLE IF NOT EXISTS mention_index_state (
+        chapter_id   INTEGER PRIMARY KEY REFERENCES chapters(id) ON DELETE CASCADE,
+        content_hash TEXT NOT NULL DEFAULT ''
+    );
+    ",
+),
+(
+    // V16（审查 UX-3）：群像角色管理扩展字段。
+    //   faction 阵营；alive 存亡（NULL 未知 / 1 存活 / 0 死亡）；
+    //   importance 重要度 0 龙套..3 核心；is_pov 是否 POV 视角人物；
+    //   tags 标签 JSON 数组；custom_fields 自定义字段 JSON（键值对，不预设结构）。
+    16,
+    "
+    ALTER TABLE characters ADD COLUMN faction TEXT NOT NULL DEFAULT '';
+    ALTER TABLE characters ADD COLUMN alive INTEGER;
+    ALTER TABLE characters ADD COLUMN importance INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE characters ADD COLUMN is_pov INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE characters ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE characters ADD COLUMN custom_fields TEXT NOT NULL DEFAULT '{}';
+    ",
+),
+(
+    // V17（审查新增功能）：场景级写作板、人物弧光追踪、连续性检查队列。
+    //   scenes 章下场景；character_arcs 按章记录欲望-选择-代价-状态变化；
+    //   continuity_issues 确定性规则扫描出的问题，带用户确认 / 忽略状态。
+    17,
+    "
+    CREATE TABLE IF NOT EXISTS scenes (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        chapter_id   INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        sort_order   INTEGER NOT NULL DEFAULT 0,
+        pov          TEXT NOT NULL DEFAULT '',     -- 视角人物
+        time_of_scene TEXT NOT NULL DEFAULT '',    -- 时间
+        place        TEXT NOT NULL DEFAULT '',     -- 地点
+        goal         TEXT NOT NULL DEFAULT '',     -- 目标
+        conflict     TEXT NOT NULL DEFAULT '',     -- 冲突
+        result       TEXT NOT NULL DEFAULT '',     -- 结果
+        target_words INTEGER NOT NULL DEFAULT 0,   -- 目标字数
+        content      TEXT NOT NULL DEFAULT '',     -- 场景正文 / 草稿
+        created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_scenes_chapter ON scenes(chapter_id, sort_order);
+
+    CREATE TABLE IF NOT EXISTS character_arcs (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_id  INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        chapter_id    INTEGER REFERENCES chapters(id) ON DELETE SET NULL,
+        sort_order    INTEGER NOT NULL DEFAULT 0,
+        desire        TEXT NOT NULL DEFAULT '',    -- 欲望（想要什么）
+        choice        TEXT NOT NULL DEFAULT '',    -- 选择（做了什么）
+        cost          TEXT NOT NULL DEFAULT '',    -- 代价（失去什么）
+        state_change  TEXT NOT NULL DEFAULT '',    -- 状态变化（成为什么）
+        note          TEXT NOT NULL DEFAULT '',
+        created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at    TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_arcs_character ON character_arcs(character_id, sort_order);
+
+    CREATE TABLE IF NOT EXISTS continuity_issues (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind        TEXT NOT NULL,                 -- dead_reappear / foreshadow_overdue / long_absence / pov_jump / time_note
+        fingerprint TEXT NOT NULL DEFAULT '',      -- 去重指纹：同问题不重复入库
+        title       TEXT NOT NULL DEFAULT '',
+        detail      TEXT NOT NULL DEFAULT '',
+        chapter_id  INTEGER REFERENCES chapters(id) ON DELETE SET NULL,
+        ref_id      INTEGER,                       -- 关联角色 / 边 id（可空）
+        status      INTEGER NOT NULL DEFAULT 0,   -- 0=待处理 1=已忽略 2=已解决
+        created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_continuity_fp ON continuity_issues(fingerprint);
+    ",
 )];
 
 /// 应用所有未执行的迁移
@@ -441,5 +601,13 @@ pub fn apply(conn: &Connection) -> Result<()> {
             conn.execute_batch(&format!("BEGIN;\n{sql}\nPRAGMA user_version = {version};\nCOMMIT;"))?;
         }
     }
+
+    // 权威版本源只有 PRAGMA user_version；project_info.schema_version 仅作可读镜像，
+    // 迁移完成后对齐，避免两处版本号长期不一致（审查 P2-2）。
+    let final_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let _ = conn.execute(
+        "UPDATE project_info SET schema_version = ?1 WHERE id = 1 AND schema_version <> ?1",
+        rusqlite::params![final_version],
+    );
     Ok(())
 }

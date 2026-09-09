@@ -10,6 +10,7 @@
 //! `tauri::async_runtime::spawn_blocking` 在后台线程执行，避免阻塞 UI。
 
 pub mod backup;
+pub mod arcs;
 pub mod canvas_chars;
 pub mod cards;
 pub mod chapter_canvas;
@@ -19,6 +20,8 @@ pub mod import;
 pub mod names;
 pub mod project;
 pub mod relations;
+pub mod review;
+pub mod scenes;
 pub mod search;
 pub mod stats;
 pub mod story_graph;
@@ -30,12 +33,11 @@ use crate::import::ImportCache;
 use crate::models::ProjectTree;
 use rusqlite::Connection;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// 当前打开的项目数据库句柄
 pub struct ProjectDb {
     /// 项目根目录（含 project.novel）。后续阶段备份 / 导出 / 导入功能使用
-    #[allow(dead_code)]
     pub dir: PathBuf,
     pub conn: Connection,
 }
@@ -48,6 +50,12 @@ pub struct AppState {
     project: Mutex<Option<ProjectDb>>,
     /// 导入分析会话缓存（analyze → confirm 之间持有）
     pub import_cache: ImportCache,
+}
+
+/// 中毒安全的加锁：即使持锁线程 panic，也取回内部数据继续服务，
+/// 避免一次 panic 后所有命令永久 panic（审查 P2-3）。
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl AppState {
@@ -63,20 +71,30 @@ impl AppState {
     pub fn set_current_project(&self, dir: PathBuf, conn: Connection) -> Result<ProjectTree> {
         let tree = db::project::build_project_tree(&conn, &dir)?;
         {
-            let global = self.global.lock().unwrap();
+            let global = lock(&self.global);
             db::project::touch_recent_project(
                 &global,
                 &tree.info.name,
                 &dir.to_string_lossy(),
             )?;
         }
-        *self.project.lock().unwrap() = Some(ProjectDb { dir, conn });
+        *lock(&self.project) = Some(ProjectDb { dir, conn });
         Ok(tree)
+    }
+
+    /// 只读重建当前项目目录树（不更换连接、不重新打开数据库）。
+    /// 供保存后静默刷新使用，避免 open_project 重开库导致的竞态（审查 P0-3）。
+    pub fn current_project_tree(&self) -> Result<ProjectTree> {
+        let guard = lock(&self.project);
+        match guard.as_ref() {
+            Some(pdb) => db::project::build_project_tree(&pdb.conn, &pdb.dir),
+            None => Err(AppError::Msg("当前没有打开的项目".into())),
+        }
     }
 
     /// 在当前项目上执行操作；未打开项目时返回友好错误
     pub fn with_project<T>(&self, f: impl FnOnce(&ProjectDb) -> Result<T>) -> Result<T> {
-        let guard = self.project.lock().unwrap();
+        let guard = lock(&self.project);
         match guard.as_ref() {
             Some(db) => f(db),
             None => Err(AppError::Msg("当前没有打开的项目".into())),
@@ -85,21 +103,19 @@ impl AppState {
 
     /// 关闭当前项目（不删除任何数据）
     pub fn close_current_project(&self) {
-        *self.project.lock().unwrap() = None;
+        *lock(&self.project) = None;
     }
 
     /// 取走当前项目连接并关闭（备份恢复用，需要独占文件句柄）
     pub fn take_current_project(&self) -> Option<(PathBuf, Connection)> {
-        self.project
-            .lock()
-            .unwrap()
+        lock(&self.project)
             .take()
             .map(|p| (p.dir, p.conn))
     }
 
     /// 访问全局库
     pub fn with_global<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-        let guard = self.global.lock().unwrap();
+        let guard = lock(&self.global);
         f(&guard)
     }
 }

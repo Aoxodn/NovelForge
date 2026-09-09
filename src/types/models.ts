@@ -166,6 +166,28 @@ export interface CharacterProfile {
   mapY: number | null;
   /** 单字人名误判排除词（如「简」→「简单/简历/简介…」），多字名为空 */
   excludeWords: string[];
+  /** 阵营 / 势力（审查 UX-3） */
+  faction: string;
+  /** 存亡：null 未知 / true 存活 / false 死亡 */
+  alive: boolean | null;
+  /** 重要度 0 龙套 / 1 次要 / 2 配角 / 3 核心 */
+  importance: number;
+  /** 是否 POV 视角人物 */
+  isPov: boolean;
+  /** 自由标签 */
+  tags: string[];
+  /** 自定义字段（键值对，作者按需扩展） */
+  customFields: Record<string, string>;
+}
+
+/** 人物群像扩展字段（更新时按需传入） */
+export interface CharacterMeta {
+  faction?: string;
+  alive?: boolean | null;
+  importance?: number;
+  isPov?: boolean;
+  tags?: string[];
+  customFields?: Record<string, string>;
 }
 
 /** 人物出现热度：perChapter 与全书章节顺序对齐 */

@@ -14,6 +14,9 @@
  * - 「列表」开关保留旧卡片列表（跨卷移动 / 拖拽排序在列表完成）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDurableDraft } from '../hooks/useDurableDraft';
+import { useRafCoalesce } from '../hooks/useRafCoalesce';
+import { useCanvasViewport } from '../hooks/useCanvasViewport';
 import * as api from '../api';
 import { useAppStore } from '../store/appStore';
 import type {
@@ -50,6 +53,7 @@ import {
   type LayoutStrategy,
 } from './canvas/routing';
 import { IconBack, IconPlus, IconSparkle, IconTrash } from './icons';
+import { ShortcutHelp, VOLUME_SHORTCUTS } from './CanvasChrome';
 
 const DEBOUNCE_MS = 600;
 const WORLD_NODE_W = 212;
@@ -58,7 +62,6 @@ const WORLD_W = 2400;
 const WORLD_H = 1500;
 const WORLD_CY = 480;
 
-type View = { x: number; y: number; k: number };
 type CharMention = { chapterId: number; characterId: number; mentionCount: number };
 
 const EDGE_TYPE_NAME = ['顺序', '因果', '分支', '汇合', '伏笔回收', '平行叙事', '闪回/插叙'];
@@ -154,11 +157,13 @@ export function VolumeView({
   const [renameGroup, setRenameGroup] = useState<ChapterGroup | null>(null);
   const [prompt, setPrompt] = useState<{ kind: 'newGroup' } | null>(null);
 
-  const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const [connecting, setConnecting] = useState<{ from: number; x: number; y: number } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const viewRef = useRef(view);
-  viewRef.current = view;
+  // 视口（平移/缩放/世界坐标）收敛到共享 hook（审查 P2-2），随 detail/showList 重绑滚轮
+  const { view, setView, viewRef, toWorld } = useCanvasViewport(
+    svgRef,
+    `${detail?.node.id ?? ''}-${showList}`,
+  );
   const lastClickRef = useRef<{ id: number; t: number } | null>(null);
   const dragRef = useRef<
     | { kind: 'pan'; sx: number; sy: number; ox: number; oy: number }
@@ -301,26 +306,6 @@ export function VolumeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail]);
 
-  // 滚轮缩放（以光标为中心）
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = svg.getBoundingClientRect();
-      const cx = e.clientX - rect.left;
-      const cy = e.clientY - rect.top;
-      setView((v) => {
-        const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-        const k = Math.min(3, Math.max(0.2, v.k * factor));
-        const ratio = k / v.k;
-        return { k, x: cx - (cx - v.x) * ratio, y: cy - (cy - v.y) * ratio };
-      });
-    };
-    svg.addEventListener('wheel', onWheel, { passive: false });
-    return () => svg.removeEventListener('wheel', onWheel);
-  }, [detail, showList]);
-
   // 进入卷内后自适应视图
   useEffect(() => {
     if (detail) fitView();
@@ -341,16 +326,6 @@ export function VolumeView({
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onBack, focusChar, selectedChapter, selectedChar]);
-
-  const toWorld = (clientX: number, clientY: number) => {
-    const svg = svgRef.current!;
-    const rect = svg.getBoundingClientRect();
-    const v = viewRef.current;
-    return {
-      x: (clientX - rect.left - v.x) / v.k,
-      y: (clientY - rect.top - v.y) / v.k,
-    };
-  };
 
   // ---------- 派生 ----------
 
@@ -763,13 +738,13 @@ export function VolumeView({
     svgRef.current?.setPointerCapture(e.pointerId);
   };
 
-  const onPointerMove = (e: React.PointerEvent) => {
+  const applyMove = (clientX: number, clientY: number) => {
     const d = dragRef.current;
     if (!d) return;
     if (d.kind === 'pan') {
-      setView((v) => ({ ...v, x: d.ox + (e.clientX - d.sx), y: d.oy + (e.clientY - d.sy) }));
+      setView((v) => ({ ...v, x: d.ox + (clientX - d.sx), y: d.oy + (clientY - d.sy) }));
     } else if (d.kind === 'node') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       d.moved = true;
       setPositions((prev) => {
         const next = new Map(prev);
@@ -777,10 +752,10 @@ export function VolumeView({
         return next;
       });
     } else if (d.kind === 'connect') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       setConnecting((c) => (c ? { ...c, x: w.x, y: w.y } : c));
     } else if (d.kind === 'group') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       const dx = w.x - d.ox;
       const dy = w.y - d.oy;
       if (Math.hypot(dx, dy) > 4) d.moved = true;
@@ -790,7 +765,7 @@ export function VolumeView({
         return next;
       });
     } else if (d.kind === 'edge-bend') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       const delta = perpComponent(d.p0, d.p1, w) - d.startPerp;
       if (Math.abs(delta) > 4) d.moved = true;
       const bend = Math.max(-400, Math.min(400, d.startBend + delta));
@@ -800,10 +775,10 @@ export function VolumeView({
         return next;
       });
     } else if (d.kind === 'gconnect') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       setGconnecting((c) => (c ? { ...c, x: w.x, y: w.y } : c));
     } else if (d.kind === 'gbend') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       const delta = perpComponent(d.p0, d.p1, w) - d.startPerp;
       if (Math.abs(delta) > 4) d.moved = true;
       const bend = Math.max(-400, Math.min(400, d.startBend + delta));
@@ -813,7 +788,7 @@ export function VolumeView({
         return next;
       });
     } else if (d.kind === 'char') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       d.moved = true;
       setCharManual((prev) => {
         const next = new Map(prev);
@@ -821,10 +796,16 @@ export function VolumeView({
         return next;
       });
     } else if (d.kind === 'char-connect') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       setCharConnecting((c) => (c ? { ...c, x: w.x, y: w.y } : c));
     }
   };
+
+  // pointermove 高频触发，用 rAF 合帧，每帧最多 setState 一次（审查 P2-1）
+  const scheduleMove = useRafCoalesce((pt: { x: number; y: number }) =>
+    applyMove(pt.x, pt.y),
+  );
+  const onPointerMove = (e: React.PointerEvent) => scheduleMove({ x: e.clientX, y: e.clientY });
 
   const onPointerUp = async (e: React.PointerEvent) => {
     svgRef.current?.releasePointerCapture(e.pointerId);
@@ -861,11 +842,14 @@ export function VolumeView({
     } else if (d.kind === 'group') {
       if (!d.moved) return;
       try {
+        const batch = [];
         for (const [id] of d.base) {
           const cur = positionsRef.current.get(id);
           if (!cur) continue;
-          await api.moveChapterNode(id, cur.x / WORLD_W, cur.y / WORLD_H);
+          batch.push({ chapterId: id, mapX: cur.x / WORLD_W, mapY: cur.y / WORLD_H });
         }
+        // 单事务批量提交，避免逐章 IPC 失败留下半移动状态（审查 P2-1）
+        await api.moveChapterNodes(batch);
         notify();
       } catch (err) {
         showToast(String(err), 'error');
@@ -1373,6 +1357,7 @@ export function VolumeView({
           <button className="btn btn-mini" onClick={() => setShowAdd(true)}>
             <IconPlus /> 添加章节
           </button>
+          <ShortcutHelp shortcuts={VOLUME_SHORTCUTS} title={`卷「${node.title}」章节图 · 操作`} />
         </div>
       </div>
 
@@ -2202,28 +2187,16 @@ function truncate(s: string, n: number) {
 // ---------- 详情面板：卷信息（含卷细纲，600ms 防抖自动保存） ----------
 
 function VolumeInfoPanel({ node, chapterCount }: { node: VolumeDetail['node']; chapterCount: number }) {
-  const showToast = useAppStore((s) => s.showToast);
-  const [summary, setSummary] = useState(node.summary);
-  const timerRef = useRef<number | null>(null);
-  const latestRef = useRef(summary);
-
-  useEffect(() => {
-    latestRef.current = summary;
-    if (summary === node.summary) return;
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(async () => {
-      try {
-        await api.setVolumeSummary(node.id, latestRef.current);
-        window.dispatchEvent(new Event('nf:story-updated'));
-      } catch (e) {
-        showToast(String(e), 'error');
-      }
-    }, DEBOUNCE_MS);
-    return () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [summary]);
+  const { draft: vDraft, setDraft: setVDraft, error: vError } = useDurableDraft<{ summary: string }>(
+    node.id,
+    { summary: node.summary },
+    async (id, d) => {
+      await api.setVolumeSummary(id, d.summary);
+      window.dispatchEvent(new Event('nf:story-updated'));
+    },
+    DEBOUNCE_MS,
+  );
+  const summary = vDraft.summary;
 
   const donePct = node.chapterCount > 0 ? Math.round((node.doneChapters / node.chapterCount) * 100) : 0;
   return (
@@ -2242,8 +2215,9 @@ function VolumeInfoPanel({ node, chapterCount }: { node: VolumeDetail['node']; c
           value={summary}
           rows={9}
           placeholder="这一卷写什么？主角目标、核心冲突、结尾钩子……"
-          onChange={(e) => setSummary(e.target.value)}
+          onChange={(e) => setVDraft({ summary: e.target.value })}
         />
+        {vError && <div className="draft-error-line">卷细纲保存失败：{vError}</div>}
       </div>
       <div className="info-empty">
         画布操作：拖动章节自由摆放；节点右侧圆点拖出连线；悬停连线拖中点小圆点调弧度、点击编辑；
@@ -2272,29 +2246,17 @@ function ChapterDetailPanel({
   onSelectChar: (id: number) => void;
   onOpenContent: () => void;
 }) {
-  const showToast = useAppStore((s) => s.showToast);
-  const [summary, setSummary] = useState(chapter.summary);
-  const [notes, setNotes] = useState(chapter.notes);
-  const timerRef = useRef<number | null>(null);
-  const latestRef = useRef({ summary, notes });
-
-  useEffect(() => {
-    latestRef.current = { summary, notes };
-    if (summary === chapter.summary && notes === chapter.notes) return;
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(async () => {
-      try {
-        await api.setChapterOutline(chapter.id, latestRef.current.summary, latestRef.current.notes);
-        window.dispatchEvent(new Event('nf:story-updated'));
-      } catch (e) {
-        showToast(String(e), 'error');
-      }
-    }, DEBOUNCE_MS);
-    return () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [summary, notes]);
+  const { draft: cDraft, setDraft: setCDraft, error: cError } = useDurableDraft<{ summary: string; notes: string }>(
+    chapter.id,
+    { summary: chapter.summary, notes: chapter.notes },
+    async (id, d) => {
+      await api.setChapterOutline(id, d.summary, d.notes);
+      window.dispatchEvent(new Event('nf:story-updated'));
+    },
+    DEBOUNCE_MS,
+  );
+  const summary = cDraft.summary;
+  const notes = cDraft.notes;
 
   const charNames = new Map(presence.map((p) => [p.characterId, p.name]));
 
@@ -2359,7 +2321,7 @@ function ChapterDetailPanel({
           value={summary}
           rows={5}
           placeholder="这一章写什么？（自动保存）"
-          onChange={(e) => setSummary(e.target.value)}
+          onChange={(e) => setCDraft({ summary: e.target.value })}
         />
       </div>
       <div>
@@ -2369,8 +2331,9 @@ function ChapterDetailPanel({
           value={notes}
           rows={4}
           placeholder="待改、灵感速记……（不参与导出）"
-          onChange={(e) => setNotes(e.target.value)}
+          onChange={(e) => setCDraft({ notes: e.target.value })}
         />
+        {cError && <div className="draft-error-line">章纲保存失败：{cError}</div>}
       </div>
       <button className="btn btn-primary" onClick={onOpenContent}>
         打开正文（进入写作）

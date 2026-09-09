@@ -17,10 +17,12 @@ mod db;
 mod error;
 mod import;
 mod matching;
+mod mention_index;
 mod models;
 mod names;
 mod names_dict;
 mod names_person;
+mod services;
 mod char_stopwords;
 mod text;
 
@@ -32,6 +34,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
+            // 跨平台：仅 Windows 使用自定义无边框标题栏；macOS / Linux 恢复原生装饰，
+            // 否则自定义的 Windows 风格控件在其它平台无法正常拖拽 / 关闭（审查跨平台项）。
+            #[cfg(not(target_os = "windows"))]
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_decorations(true);
+            }
             // 初始化全局数据库（%APPDATA%/NovelForge/app.db）
             let data_dir = app.path().app_data_dir()?;
             let global = db::global::open_global_db(&data_dir)
@@ -43,6 +51,7 @@ pub fn run() {
             // 项目
             commands::project::create_project,
             commands::project::open_project,
+            commands::project::get_current_project_tree,
             commands::project::close_project,
             commands::project::update_project_outline,
             commands::project::list_recent_projects,
@@ -70,9 +79,11 @@ pub fn run() {
             commands::chapter::move_chapter,
             commands::chapter::list_chapter_versions,
             commands::chapter::restore_chapter_version,
+            commands::chapter::emergency_dump_text,
             // 导入（阶段 3）
             commands::import::import_analyze_file,
             commands::import::import_confirm,
+            commands::import::import_cancel,
             // 导出 / 搜索 / 备份（阶段 4）
             commands::export::export_novel,
             commands::search::search_project,
@@ -90,6 +101,7 @@ pub fn run() {
             commands::cards::update_location,
             commands::cards::delete_location,
             commands::cards::get_chapter_presence,
+            commands::cards::get_alias_conflicts,
             commands::cards::rebuild_mentions,
             // 码字统计 / 随机取名（阶段 6）
             commands::stats::get_writing_stats,
@@ -123,6 +135,7 @@ pub fn run() {
             commands::relations::list_volume_character_mentions,
             // L2 卷内画布（v0.9.13 可编辑化：章节坐标 / 小节 / 章间连线）
             commands::chapter_canvas::move_chapter_node,
+            commands::chapter_canvas::move_chapter_nodes,
             commands::chapter_canvas::create_chapter_edge,
             commands::chapter_canvas::update_chapter_edge,
             commands::chapter_canvas::delete_chapter_edge,
@@ -142,6 +155,28 @@ pub fn run() {
             commands::canvas_chars::delete_character_binding,
             commands::canvas_chars::list_character_bindings,
             commands::canvas_chars::list_char_volume_pos,
+            // 场景级写作板（审查新增功能）
+            commands::scenes::list_scenes,
+            commands::scenes::create_scene,
+            commands::scenes::update_scene,
+            commands::scenes::delete_scene,
+            commands::scenes::reorder_scenes,
+            commands::scenes::compose_scenes_to_chapter,
+            // 人物弧光追踪
+            commands::arcs::list_arcs,
+            commands::arcs::create_arc,
+            commands::arcs::update_arc,
+            commands::arcs::delete_arc,
+            commands::arcs::reorder_arcs,
+            // 安全重命名 / 连续性检查 / 修订工作台
+            commands::review::preview_rename_character,
+            commands::review::apply_rename_character,
+            commands::review::scan_continuity,
+            commands::review::list_continuity,
+            commands::review::set_continuity_status,
+            commands::review::analyze_revision,
+            commands::review::preview_cross_replace,
+            commands::review::apply_cross_replace,
         ])
         .run(tauri::generate_context!())
         .expect("NovelForge 启动失败");

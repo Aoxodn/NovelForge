@@ -8,6 +8,7 @@ import type {
   ChapterPresenceView,
   ChapterVersionMeta,
   CharacterHeat,
+  CharacterMeta,
   CharacterProfile,
   ExportResult,
   ImportAnalysis,
@@ -56,6 +57,9 @@ export const createProject = (opts: {
 export const openProject = (path: string) =>
   cmd<ProjectTree>('open_project', { path });
 
+/** 只读刷新当前项目树（复用现有连接，不重开数据库） */
+export const getCurrentProjectTree = () => cmd<ProjectTree>('get_current_project_tree');
+
 export const closeProject = () => cmd<void>('close_project');
 
 export const updateProjectOutline = (outline: string) =>
@@ -99,6 +103,10 @@ export const saveChapter = (
   snapshot: boolean,
 ) =>
   cmd<SaveResult>('save_chapter', { chapterId, title, content, snapshot });
+
+/** 紧急导出未保存正文到指定文件（保存失败抢救用） */
+export const emergencyDumpText = (path: string, title: string, content: string) =>
+  cmd<void>('emergency_dump_text', { path, title, content });
 
 export const renameChapter = (chapterId: number, title: string) =>
   cmd<void>('rename_chapter', { chapterId, title });
@@ -150,6 +158,10 @@ export const importConfirm = (opts: {
     newVolumeTitle: opts.newVolumeTitle,
   });
 
+/** 取消导入：释放后端分析缓存（大文本不再滞留内存） */
+export const importCancel = (analysisId: string) =>
+  cmd<void>('import_cancel', { analysisId });
+
 // ---------- 导出（阶段 4） ----------
 
 export const exportNovel = (opts: {
@@ -192,6 +204,7 @@ export const addCharacter = (
   role?: string,
   notes?: string,
   excludeWords?: string[],
+  meta?: CharacterMeta,
 ) =>
   cmd<CharacterProfile>('add_character', {
     name,
@@ -199,6 +212,7 @@ export const addCharacter = (
     role: role ?? null,
     notes: notes ?? null,
     excludeWords: excludeWords ?? null,
+    meta: meta ?? null,
   });
 
 export const updateCharacter = (
@@ -209,6 +223,7 @@ export const updateCharacter = (
     role?: string;
     notes?: string;
     excludeWords?: string[];
+    meta?: CharacterMeta;
   },
 ) =>
   cmd<void>('update_character', {
@@ -218,6 +233,7 @@ export const updateCharacter = (
     role: patch.role ?? null,
     notes: patch.notes ?? null,
     excludeWords: patch.excludeWords ?? null,
+    meta: patch.meta ?? null,
   });
 
 export const deleteCharacter = (characterId: number) =>
@@ -251,6 +267,15 @@ export const getChapterPresence = (chapterId: number) =>
 
 /** 全量重建提及统计（打开项目后自动调用，后台线程执行） */
 export const rebuildMentions = () => cmd<number>('rebuild_mentions');
+
+/** 别名 / 称谓冲突：同一称谓被多张人物卡声明，需作者裁决归属 */
+export interface AliasConflict {
+  label: string;
+  characterIds: number[];
+  characterNames: string[];
+}
+/** 检测全书人物重名 / 共享别名冲突 */
+export const getAliasConflicts = () => cmd<AliasConflict[]>('get_alias_conflicts');
 
 // ---------- 码字统计 / 随机取名（阶段 6） ----------
 
@@ -443,6 +468,11 @@ export const listVolumeCharacterMentions = (volumeId: number) =>
 export const moveChapterNode = (chapterId: number, mapX: number, mapY: number) =>
   cmd<void>('move_chapter_node', { chapterId, mapX, mapY });
 
+/** 批量保存章节画布坐标（小节 / 多选整体拖动，单事务） */
+export const moveChapterNodes = (
+  positions: { chapterId: number; mapX: number; mapY: number }[],
+) => cmd<number>('move_chapter_nodes', { positions });
+
 /** 建章间连线（同卷）。伏笔（edgeType=4）label 必填 */
 export const createChapterEdge = (opts: {
   fromChapter: number;
@@ -544,3 +574,150 @@ export const listCharacterBindings = () =>
 /** L2 卷内人物画布坐标 */
 export const listCharVolumePos = (volumeId: number) =>
   cmd<CharacterCanvasPos[]>('list_char_volume_pos', { volumeId });
+
+
+// ================= 审查新增功能：场景板 / 人物弧光 / 安全改名 / 连续性 / 修订 =================
+
+export interface Scene {
+  id: number;
+  chapterId: number;
+  sortOrder: number;
+  pov: string;
+  timeOfScene: string;
+  place: string;
+  goal: string;
+  conflict: string;
+  result: string;
+  targetWords: number;
+  content: string;
+}
+
+export const listScenes = (chapterId: number) =>
+  cmd<Scene[]>('list_scenes', { chapterId });
+export const createScene = (chapterId: number) =>
+  cmd<Scene>('create_scene', { chapterId });
+export const updateScene = (
+  sceneId: number,
+  patch: Partial<Pick<Scene, 'pov' | 'timeOfScene' | 'place' | 'goal' | 'conflict' | 'result' | 'targetWords' | 'content'>>,
+) =>
+  cmd<void>('update_scene', {
+    sceneId,
+    pov: patch.pov ?? null,
+    timeOfScene: patch.timeOfScene ?? null,
+    place: patch.place ?? null,
+    goal: patch.goal ?? null,
+    conflict: patch.conflict ?? null,
+    result: patch.result ?? null,
+    targetWords: patch.targetWords ?? null,
+    content: patch.content ?? null,
+  });
+export const deleteScene = (sceneId: number) =>
+  cmd<void>('delete_scene', { sceneId });
+export const reorderScenes = (chapterId: number, orderedIds: number[]) =>
+  cmd<void>('reorder_scenes', { chapterId, orderedIds });
+export const composeScenesToChapter = (chapterId: number, overwrite: boolean) =>
+  cmd<string>('compose_scenes_to_chapter', { chapterId, overwrite });
+
+export interface CharacterArc {
+  id: number;
+  characterId: number;
+  chapterId: number | null;
+  sortOrder: number;
+  desire: string;
+  choice: string;
+  cost: string;
+  stateChange: string;
+  note: string;
+  chapterTitle: string | null;
+}
+
+export const listArcs = (characterId: number) =>
+  cmd<CharacterArc[]>('list_arcs', { characterId });
+export const createArc = (characterId: number, chapterId: number | null) =>
+  cmd<CharacterArc>('create_arc', { characterId, chapterId });
+export const updateArc = (
+  arcId: number,
+  patch: Partial<Pick<CharacterArc, 'chapterId' | 'desire' | 'choice' | 'cost' | 'stateChange' | 'note'>>,
+) =>
+  cmd<void>('update_arc', {
+    arcId,
+    chapterId: patch.chapterId === undefined ? null : patch.chapterId,
+    desire: patch.desire ?? null,
+    choice: patch.choice ?? null,
+    cost: patch.cost ?? null,
+    stateChange: patch.stateChange ?? null,
+    note: patch.note ?? null,
+  });
+export const deleteArc = (arcId: number) => cmd<void>('delete_arc', { arcId });
+export const reorderArcs = (characterId: number, orderedIds: number[]) =>
+  cmd<void>('reorder_arcs', { characterId, orderedIds });
+
+export interface ChapterHit {
+  chapterId: number;
+  chapterTitle: string;
+  count: number;
+  snippets: string[];
+}
+
+export const previewRenameCharacter = (
+  characterId: number,
+  excludeQuotes: boolean,
+  chapterIds: number[] | null,
+) =>
+  cmd<ChapterHit[]>('preview_rename_character', {
+    characterId,
+    excludeQuotes,
+    chapterIds,
+  });
+export const applyRenameCharacter = (
+  characterId: number,
+  newName: string,
+  excludeQuotes: boolean,
+  chapterIds: number[] | null,
+) =>
+  cmd<number>('apply_rename_character', {
+    characterId,
+    newName,
+    excludeQuotes,
+    chapterIds,
+  });
+
+export interface ContinuityIssue {
+  id: number;
+  kind: string;
+  fingerprint: string;
+  title: string;
+  detail: string;
+  chapterId: number | null;
+  refId: number | null;
+  status: number;
+}
+
+export const scanContinuity = (longAbsence?: number, foreshadowOverdue?: number) =>
+  cmd<ContinuityIssue[]>('scan_continuity', {
+    longAbsence: longAbsence ?? null,
+    foreshadowOverdue: foreshadowOverdue ?? null,
+  });
+export const listContinuity = () =>
+  cmd<ContinuityIssue[]>('list_continuity');
+export const setContinuityStatus = (issueId: number, status: number) =>
+  cmd<void>('set_continuity_status', { issueId, status });
+
+export interface RevisionHit {
+  chapterId: number;
+  chapterTitle: string;
+  kind: string;
+  message: string;
+  snippet: string;
+}
+
+export const analyzeRevision = (longSentence?: number) =>
+  cmd<RevisionHit[]>('analyze_revision', { longSentence: longSentence ?? null });
+export const previewCrossReplace = (find: string, chapterIds: number[] | null) =>
+  cmd<ChapterHit[]>('preview_cross_replace', { find, chapterIds });
+export const applyCrossReplace = (
+  find: string,
+  replace: string,
+  chapterIds: number[] | null,
+) =>
+  cmd<number>('apply_cross_replace', { find, replace, chapterIds });

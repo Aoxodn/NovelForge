@@ -315,9 +315,11 @@ function ForeshadowTable({
   /** 位置跳转：章级锚点 → 打开正文；卷级 → 地图定位 */
   const jump = (chapterId: number | null, volumeId: number) => {
     if (chapterId !== null) {
-      selectChapter(chapterId);
-      void useEditorStore.getState().loadChapter(chapterId);
-      useAppStore.getState().setViewMode('editor');
+      void useEditorStore.getState().loadChapter(chapterId).then((ok) => {
+        if (!ok) return;
+        selectChapter(chapterId);
+        useAppStore.getState().setViewMode('editor');
+      });
     } else {
       focusMapNode(volumeId);
     }

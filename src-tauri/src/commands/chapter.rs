@@ -279,6 +279,15 @@ pub fn delete_chapter(state: State<'_, AppState>, chapter_id: i64) -> Result<()>
         if n == 0 {
             return Err(AppError::Msg("章节不存在".into()));
         }
+        // 软删即时移除本章提及，避免回收站章节仍计入角色卡（审查 P1-3）
+        db.conn.execute(
+            "DELETE FROM character_mentions WHERE chapter_id = ?1",
+            params![chapter_id],
+        )?;
+        db.conn.execute(
+            "DELETE FROM location_mentions WHERE chapter_id = ?1",
+            params![chapter_id],
+        )?;
         Ok(())
     })
 }
@@ -459,6 +468,15 @@ pub fn restore_chapter(state: State<'_, AppState>, chapter_id: i64) -> Result<()
         if n == 0 {
             return Err(AppError::Msg("章节不在回收站中".into()));
         }
+        // 恢复后即时重算本章提及
+        let content: String = db
+            .conn
+            .query_row(
+                "SELECT content FROM chapters WHERE id = ?1",
+                params![chapter_id],
+                |r| r.get(0),
+            )?;
+        super::cards::update_chapter_mentions(&db.conn, chapter_id, &content)?;
         Ok(())
     })
 }
@@ -510,4 +528,24 @@ pub fn reverse_volume_chapters(state: State<'_, AppState>, volume_id: i64) -> Re
         tx.commit()?;
         Ok(())
     })
+}
+
+
+/// 紧急导出：保存失败时把内存中的未保存正文写到用户指定路径（UTF-8 带 BOM）。
+/// 不依赖项目数据库连接，保证数据库异常时仍能抢救正文。
+#[tauri::command]
+pub fn emergency_dump_text(path: String, title: String, content: String) -> Result<()> {
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut body = String::new();
+    body.push_str(&title);
+    body.push_str("\n\n");
+    body.push_str(&content);
+    // UTF-8 BOM，保证 Windows 记事本/各平台正确识别编码
+    let mut bytes: Vec<u8> = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(body.as_bytes());
+    std::fs::write(p, bytes)?;
+    Ok(())
 }

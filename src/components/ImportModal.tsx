@@ -77,6 +77,15 @@ export function ImportModal({
     if (dups.length > 0) setDiscarded(new Set(dups));
   }, [analysis]);
 
+  // 卸载（取消 / 关闭）时显式释放后端分析缓存，避免大文本长期滞留内存（审查 P1-7）。
+  // 成功导入后后端已消费该缓存，此处 cancel 为幂等空操作。
+  useEffect(() => {
+    const id = analysis?.id;
+    return () => {
+      if (id) void api.importCancel(id).catch(() => undefined);
+    };
+  }, [analysis?.id]);
+
   // 普通块取消 → 并入前一章；重复块取消 → 丢弃内容
   const toggleChapter = (c: PreviewChapter) => {
     const toggle = (setter: typeof setExcluded) =>

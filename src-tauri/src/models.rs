@@ -230,6 +230,18 @@ pub struct CharacterProfile {
     pub map_y: Option<f64>,
     /// 单字人名误判排除词（如「简」→「简单/简历/简介…」），多字名为空
     pub exclude_words: Vec<String>,
+    /// 阵营 / 势力（审查 UX-3 群像管理）
+    pub faction: String,
+    /// 存亡：NULL 未知 / 1 存活 / 0 死亡（连续性检查器据此判定「死者再现」）
+    pub alive: Option<i64>,
+    /// 重要度 0 龙套 / 1 次要 / 2 配角 / 3 核心主角
+    pub importance: i64,
+    /// 是否 POV 视角人物
+    pub is_pov: bool,
+    /// 自由标签
+    pub tags: Vec<String>,
+    /// 自定义字段（键值对，作者按需扩展，不预设固定结构）
+    pub custom_fields: serde_json::Value,
 }
 
 /// 人物出现热度（文档三十一节）：按全书章节顺序的出现次数序列
@@ -598,18 +610,3 @@ pub struct CharacterCanvasPos {
     pub map_y: f64,
 }
 
-/// 人物图谱节点（L1：全部已建卡人物 + 图谱坐标 + 是否上图谱）
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CharacterGraphNode {
-    pub id: i64,
-    pub name: String,
-    pub role: String,
-    /// 总提及（0 = 正文未出现，纯图谱节点）
-    pub total_mentions: i64,
-    /// 出场卷数（跨卷人物才画轨迹带）
-    pub volume_count: i64,
-    /// 图谱坐标（NULL = 未上图谱 / 自动布局）
-    pub map_x: Option<f64>,
-    pub map_y: Option<f64>,
-}

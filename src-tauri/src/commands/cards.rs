@@ -11,7 +11,7 @@
 
 use crate::commands::AppState;
 use crate::error::{AppError, Result};
-use crate::matching::{count_occurrences, count_occurrences_with_exclusions};
+use crate::mention_index::{self, EntityPatterns, MentionMatcher};
 use crate::models::{
     ChapterPresenceView, CharacterHeat, CharacterProfile, EntityMentionView, LocationProfile,
 };
@@ -38,8 +38,42 @@ fn character_patterns(name: &str, aliases: &[String]) -> Vec<String> {
     v
 }
 
+/// 读取全书人物匹配实体（id + 名字/别名 + 排除词）
+pub(crate) fn load_char_entities(conn: &Connection) -> Result<Vec<EntityPatterns>> {
+    let mut stmt = conn.prepare("SELECT id, name, aliases, exclude_words FROM characters")?;
+    let rows = stmt
+        .query_map([], |r| {
+            let id: i64 = r.get(0)?;
+            let name: String = r.get(1)?;
+            let aliases: Vec<String> = parse_aliases(&r.get::<_, String>(2)?);
+            let excludes: Vec<String> = parse_exclude_words(&r.get::<_, String>(3)?);
+            Ok(EntityPatterns {
+                id,
+                patterns: character_patterns(&name, &aliases),
+                excludes,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// 读取全书地点匹配实体
+fn load_loc_entities(conn: &Connection) -> Result<Vec<EntityPatterns>> {
+    let mut stmt = conn.prepare("SELECT id, name FROM locations")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(EntityPatterns {
+                id: r.get(0)?,
+                patterns: vec![r.get::<_, String>(1)?],
+                excludes: Vec::new(),
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// 全书章节顺序（卷序 → 章序 → id）
-fn chapter_order(conn: &Connection) -> Result<Vec<i64>> {
+pub(crate) fn chapter_order(conn: &Connection) -> Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT c.id FROM chapters c
          JOIN volumes v ON v.id = c.volume_id
@@ -62,7 +96,7 @@ fn chapter_ends(conn: &Connection, table: &str, key_col: &str) -> Result<Chapter
          FROM {table} m
          JOIN chapters c ON c.id = m.chapter_id
          JOIN volumes v ON v.id = c.volume_id
-         WHERE m.mention_count > 0
+         WHERE m.mention_count > 0 AND c.deleted_at IS NULL
          ORDER BY v.sort_order, c.sort_order, c.id"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -83,136 +117,147 @@ fn chapter_ends(conn: &Connection, table: &str, key_col: &str) -> Result<Chapter
     Ok(map)
 }
 
-/// 单章提及重算（save_chapter 事务内调用）：删旧 → 精确匹配 → 插新
+/// 记录某章已按当前 content_hash 纳入统计（增量索引状态，V15）
+fn mark_chapter_indexed(conn: &Connection, chapter_id: i64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO mention_index_state (chapter_id, content_hash)
+         SELECT id, COALESCE(content_hash,'') FROM chapters WHERE id = ?1
+         ON CONFLICT(chapter_id) DO UPDATE SET content_hash = excluded.content_hash",
+        params![chapter_id],
+    )?;
+    Ok(())
+}
+
+/// 单章提及重算（save_chapter 事务内调用）：
+/// 用全书共享的全局匹配器各扫描一次，每个文本区间唯一归属一个实体，
+/// 删旧 → 计数 → 插新。匹配器按实体词指纹缓存，正文保存不重复编译正则。
 pub(crate) fn update_chapter_mentions(
     conn: &Connection,
     chapter_id: i64,
     content: &str,
 ) -> Result<()> {
-    // 人物（名字 + 别名 + 误判排除词）
-    let characters: Vec<(i64, Vec<String>, Vec<String>)> = {
-        let mut stmt =
-            conn.prepare("SELECT id, name, aliases, exclude_words FROM characters")?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    character_patterns(&r.get::<_, String>(1)?, &parse_aliases(&r.get::<_, String>(2)?)),
-                    parse_exclude_words(&r.get::<_, String>(3)?),
-                ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        rows
-    };
+    let chars = load_char_entities(conn)?;
+    let locs = load_loc_entities(conn)?;
+    let (char_m, loc_m) = mention_index::matchers_for(chars, locs);
+    let char_hits = char_m.count(content);
+    let loc_hits = loc_m.count(content);
+
     conn.execute(
         "DELETE FROM character_mentions WHERE chapter_id = ?1",
         params![chapter_id],
     )?;
-    for (cid, pats, excludes) in &characters {
-        let n = count_occurrences_with_exclusions(content, pats, excludes);
-        if n > 0 {
-            conn.execute(
-                "INSERT INTO character_mentions (character_id, chapter_id, mention_count)
-                 VALUES (?1, ?2, ?3)",
-                params![cid, chapter_id, n as i64],
-            )?;
+    {
+        let mut ins = conn.prepare(
+            "INSERT INTO character_mentions (character_id, chapter_id, mention_count)
+             VALUES (?1, ?2, ?3)",
+        )?;
+        for (cid, n) in &char_hits {
+            if *n > 0 {
+                ins.execute(params![cid, chapter_id, n])?;
+            }
         }
     }
 
-    // 地点
-    let locations: Vec<(i64, String)> = {
-        let mut stmt = conn.prepare("SELECT id, name FROM locations")?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        rows
-    };
     conn.execute(
         "DELETE FROM location_mentions WHERE chapter_id = ?1",
         params![chapter_id],
     )?;
-    for (lid, name) in &locations {
-        let n = count_occurrences(content, &[name.clone()]);
-        if n > 0 {
-            conn.execute(
-                "INSERT INTO location_mentions (location_id, chapter_id, mention_count)
-                 VALUES (?1, ?2, ?3)",
-                params![lid, chapter_id, n as i64],
-            )?;
+    {
+        let mut ins = conn.prepare(
+            "INSERT INTO location_mentions (location_id, chapter_id, mention_count)
+             VALUES (?1, ?2, ?3)",
+        )?;
+        for (lid, n) in &loc_hits {
+            if *n > 0 {
+                ins.execute(params![lid, chapter_id, n])?;
+            }
         }
     }
+    mark_chapter_indexed(conn, chapter_id)?;
     Ok(())
 }
 
-/// 单张人物卡的全量重算（add / update 后调用）
-fn rescan_character(conn: &Connection, character_id: i64) -> Result<()> {
-    let (name, aliases_json, exclude_json): (String, String, String) = conn.query_row(
-        "SELECT name, aliases, exclude_words FROM characters WHERE id = ?1",
-        params![character_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
-    let pats = character_patterns(&name, &parse_aliases(&aliases_json));
-    let excludes = parse_exclude_words(&exclude_json);
+/// 全书提及重建（全局匹配器，每章只扫一次）。
+/// 人物改名 / 别名变化会改变跨角色归属，必须全书重算而非只算一张卡。
+/// only_chapter = Some(id) 时只重算指定章（供软删/恢复即时同步）。
+/// 注意：本函数不自开事务，由调用方决定事务边界（可在已有事务内调用）。
+pub(crate) fn rebuild_all_mentions(conn: &Connection, only_chapter: Option<i64>) -> Result<()> {
+    let chars = load_char_entities(conn)?;
+    let locs = load_loc_entities(conn)?;
+    let (char_m, loc_m) = mention_index::matchers_for(chars, locs);
 
-    let chapters: Vec<(i64, String)> = {
-        let mut stmt = conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL")?;
+    // 选定要重算的章（仅未删除章）；None = 全书
+    let chapters: Vec<(i64, String)> = if let Some(id) = only_chapter {
+        let mut stmt =
+            conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL AND id = ?1")?;
+        let rows = stmt
+            .query_map(params![id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows
+    } else {
+        let mut stmt =
+            conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL")?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         rows
     };
-    conn.execute(
-        "DELETE FROM character_mentions WHERE character_id = ?1",
-        params![character_id],
-    )?;
-    for (ch_id, content) in &chapters {
-        let n = count_occurrences_with_exclusions(content, &pats, &excludes);
-        if n > 0 {
-            conn.execute(
-                "INSERT INTO character_mentions (character_id, chapter_id, mention_count)
-                 VALUES (?1, ?2, ?3)",
-                params![character_id, ch_id, n as i64],
-            )?;
+
+    match only_chapter {
+        Some(id) => {
+            conn.execute("DELETE FROM character_mentions WHERE chapter_id = ?1", params![id])?;
+            conn.execute("DELETE FROM location_mentions WHERE chapter_id = ?1", params![id])?;
         }
+        None => {
+            conn.execute("DELETE FROM character_mentions", [])?;
+            conn.execute("DELETE FROM location_mentions", [])?;
+        }
+    }
+    for (ch_id, content) in &chapters {
+        for (cid, n) in char_m.count(content) {
+            if n > 0 {
+                conn.execute(
+                    "INSERT INTO character_mentions (character_id, chapter_id, mention_count)
+                     VALUES (?1, ?2, ?3)",
+                    params![cid, ch_id, n],
+                )?;
+            }
+        }
+        for (lid, n) in loc_m.count(content) {
+            if n > 0 {
+                conn.execute(
+                    "INSERT INTO location_mentions (location_id, chapter_id, mention_count)
+                     VALUES (?1, ?2, ?3)",
+                    params![lid, ch_id, n],
+                )?;
+            }
+        }
+        mark_chapter_indexed(conn, *ch_id)?;
     }
     Ok(())
 }
 
-/// 单张地点卡的全量重算
-fn rescan_location(conn: &Connection, location_id: i64) -> Result<()> {
-    let name: String = conn.query_row(
-        "SELECT name FROM locations WHERE id = ?1",
-        params![location_id],
-        |r| r.get(0),
-    )?;
-    let chapters: Vec<(i64, String)> = {
-        let mut stmt = conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL")?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        rows
-    };
-    conn.execute(
-        "DELETE FROM location_mentions WHERE location_id = ?1",
-        params![location_id],
-    )?;
-    for (ch_id, content) in &chapters {
-        let n = count_occurrences(content, &[name.clone()]);
-        if n > 0 {
-            conn.execute(
-                "INSERT INTO location_mentions (location_id, chapter_id, mention_count)
-                 VALUES (?1, ?2, ?3)",
-                params![location_id, ch_id, n as i64],
-            )?;
-        }
-    }
-    Ok(())
+/// 人物群像扩展字段（审查 UX-3），add/update 时作为单个对象传入，避免 IPC 参数过多。
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CharacterMetaInput {
+    pub faction: Option<String>,
+    /// 存亡：null 未知 / true 存活 / false 死亡
+    pub alive: Option<bool>,
+    /// 重要度 0..3
+    pub importance: Option<i64>,
+    pub is_pov: Option<bool>,
+    pub tags: Option<Vec<String>>,
+    /// 自定义字段（对象），原样以 JSON 文本落库
+    pub custom_fields: Option<serde_json::Value>,
 }
 
 /// 人物档案组装：基础行 + 聚合统计 + 首末章
 fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, aliases, role, notes, map_x, map_y, exclude_words FROM characters ORDER BY name",
+        "SELECT id, name, aliases, role, notes, map_x, map_y, exclude_words,
+                faction, alive, importance, is_pov, tags, custom_fields
+         FROM characters ORDER BY importance DESC, name",
     )?;
     let base = stmt
         .query_map([], |r| {
@@ -225,16 +270,24 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
                 r.get::<_, Option<f64>>(5)?,
                 r.get::<_, Option<f64>>(6)?,
                 r.get::<_, String>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, Option<i64>>(9)?,
+                r.get::<_, i64>(10)?,
+                r.get::<_, i64>(11)?,
+                r.get::<_, String>(12)?,
+                r.get::<_, String>(13)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    // 聚合统计
+    // 聚合统计（JOIN chapters 排除软删章节，回收站章节不计入角色卡——审查 P1-3）
     let mut agg: std::collections::HashMap<i64, (i64, i64)> = std::collections::HashMap::new();
     {
         let mut s = conn.prepare(
-            "SELECT character_id, COALESCE(SUM(mention_count),0), COUNT(*)
-             FROM character_mentions GROUP BY character_id",
+            "SELECT m.character_id, COALESCE(SUM(m.mention_count),0), COUNT(*)
+             FROM character_mentions m
+             JOIN chapters c ON c.id = m.chapter_id AND c.deleted_at IS NULL
+             GROUP BY m.character_id",
         )?;
         let rows = s
             .query_map([], |r| {
@@ -249,7 +302,9 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
 
     Ok(base
         .into_iter()
-        .map(|(id, name, aliases, role, notes, map_x, map_y, exclude_words)| {
+        .map(
+            |(id, name, aliases, role, notes, map_x, map_y, exclude_words,
+              faction, alive, importance, is_pov, tags, custom_fields)| {
             let (total, ch_count) = agg.get(&id).copied().unwrap_or((0, 0));
             let end = ends.get(&id);
             CharacterProfile {
@@ -267,6 +322,12 @@ fn build_character_profiles(conn: &Connection) -> Result<Vec<CharacterProfile>> 
                 map_x,
                 map_y,
                 exclude_words: parse_exclude_words(&exclude_words),
+                faction,
+                alive,
+                importance,
+                is_pov: is_pov != 0,
+                tags: parse_aliases(&tags),
+                custom_fields: serde_json::from_str(&custom_fields).unwrap_or(serde_json::json!({})),
             }
         })
         .collect())
@@ -284,8 +345,10 @@ fn build_location_profiles(conn: &Connection) -> Result<Vec<LocationProfile>> {
     let mut agg: std::collections::HashMap<i64, (i64, i64)> = std::collections::HashMap::new();
     {
         let mut s = conn.prepare(
-            "SELECT location_id, COALESCE(SUM(mention_count),0), COUNT(*)
-             FROM location_mentions GROUP BY location_id",
+            "SELECT m.location_id, COALESCE(SUM(m.mention_count),0), COUNT(*)
+             FROM location_mentions m
+             JOIN chapters c ON c.id = m.chapter_id AND c.deleted_at IS NULL
+             GROUP BY m.location_id",
         )?;
         let rows = s
             .query_map([], |r| {
@@ -324,8 +387,10 @@ pub fn list_characters(state: State<'_, AppState>) -> Result<Vec<CharacterProfil
     state.with_project(|db| build_character_profiles(&db.conn))
 }
 
-/// 新建人物卡（手动建卡，建后立即全量统计该卡）
+/// 新建人物卡（手动建卡，建后立即全量统计该卡）。
+/// meta 为群像扩展字段，打包成对象以控制 IPC 参数数量。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn add_character(
     state: State<'_, AppState>,
     name: String,
@@ -333,6 +398,7 @@ pub fn add_character(
     role: Option<String>,
     notes: Option<String>,
     exclude_words: Option<Vec<String>>,
+    meta: Option<CharacterMetaInput>,
 ) -> Result<CharacterProfile> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -351,17 +417,31 @@ pub fn add_character(
         None => crate::char_stopwords::default_exclude_for(&name),
     };
     let exclude_json = serde_json::to_string(&exclude).unwrap_or_else(|_| "[]".into());
+    let m = meta.unwrap_or_default();
+    let tags_json = serde_json::to_string(&m.tags.unwrap_or_default()).unwrap_or_else(|_| "[]".into());
+    let cf_json = serde_json::to_string(&m.custom_fields.unwrap_or(serde_json::json!({})))
+        .unwrap_or_else(|_| "{}".into());
+    let alive_v = m.alive.map(|a| a as i64);
 
     state.with_project(|db| {
         let tx = db.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO characters (name, aliases, status, role, notes, exclude_words) VALUES (?1, ?2, 1, ?3, ?4, ?5)",
+            "INSERT INTO characters
+                (name, aliases, status, role, notes, exclude_words,
+                 faction, alive, importance, is_pov, tags, custom_fields)
+             VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 name,
                 aliases_json,
                 role.unwrap_or_default(),
                 notes.unwrap_or_default(),
                 exclude_json,
+                m.faction.unwrap_or_default(),
+                alive_v,
+                m.importance.unwrap_or(1),
+                m.is_pov.unwrap_or(false) as i64,
+                tags_json,
+                cf_json,
             ],
         )
         .map_err(|e| match e {
@@ -373,7 +453,8 @@ pub fn add_character(
             other => other.into(),
         })?;
         let id = tx.last_insert_rowid();
-        rescan_character(&tx, id)?;
+        mention_index::invalidate_cache();
+        rebuild_all_mentions(&tx, None)?;
         tx.commit()?;
 
         build_character_profiles(&db.conn)?
@@ -383,8 +464,9 @@ pub fn add_character(
     })
 }
 
-/// 更新人物卡（名字/别名变化后重算该卡统计）
+/// 更新人物卡（名字/别名变化后重算该卡统计；meta 为群像扩展字段）。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn update_character(
     state: State<'_, AppState>,
     character_id: i64,
@@ -393,6 +475,7 @@ pub fn update_character(
     role: Option<String>,
     notes: Option<String>,
     exclude_words: Option<Vec<String>>,
+    meta: Option<CharacterMetaInput>,
 ) -> Result<()> {
     state.with_project(|db| {
         let exists: i64 = db.conn.query_row(
@@ -441,6 +524,46 @@ pub fn update_character(
                 params![n, character_id],
             )?;
         }
+        if let Some(m) = meta {
+            if let Some(faction) = m.faction {
+                db.conn.execute(
+                    "UPDATE characters SET faction = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+                    params![faction, character_id],
+                )?;
+            }
+            if let Some(alive) = m.alive {
+                db.conn.execute(
+                    "UPDATE characters SET alive = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+                    params![alive as i64, character_id],
+                )?;
+            }
+            if let Some(importance) = m.importance {
+                db.conn.execute(
+                    "UPDATE characters SET importance = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+                    params![importance, character_id],
+                )?;
+            }
+            if let Some(is_pov) = m.is_pov {
+                db.conn.execute(
+                    "UPDATE characters SET is_pov = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+                    params![is_pov as i64, character_id],
+                )?;
+            }
+            if let Some(tags) = m.tags {
+                let json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+                db.conn.execute(
+                    "UPDATE characters SET tags = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+                    params![json, character_id],
+                )?;
+            }
+            if let Some(cf) = m.custom_fields {
+                let json = serde_json::to_string(&cf).unwrap_or_else(|_| "{}".into());
+                db.conn.execute(
+                    "UPDATE characters SET custom_fields = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
+                    params![json, character_id],
+                )?;
+            }
+        }
         if let Some(list) = exclude_words {
             let cleaned: Vec<String> = list
                 .iter()
@@ -455,7 +578,10 @@ pub fn update_character(
             rescan = true;
         }
         if rescan {
-            rescan_character(&db.conn, character_id)?;
+            // 名字/别名/排除词变化会改变跨角色的最长匹配归属，必须全书重建；
+            // 只改 notes/role 不触发扫描（审查 P1-5）
+            mention_index::invalidate_cache();
+            rebuild_all_mentions(&db.conn, None)?;
         }
         Ok(())
     })
@@ -472,6 +598,9 @@ pub fn delete_character(state: State<'_, AppState>, character_id: i64) -> Result
         if n == 0 {
             return Err(AppError::Msg("人物不存在".into()));
         }
+        // 删除后，原本被长名占有的区间可能归还给其它角色，需全书重建
+        mention_index::invalidate_cache();
+        rebuild_all_mentions(&db.conn, None)?;
         Ok(())
     })
 }
@@ -561,7 +690,8 @@ pub fn add_location(
             other => other.into(),
         })?;
         let id = tx.last_insert_rowid();
-        rescan_location(&tx, id)?;
+        mention_index::invalidate_cache();
+        rebuild_all_mentions(&tx, None)?;
         tx.commit()?;
 
         build_location_profiles(&db.conn)?
@@ -607,7 +737,8 @@ pub fn update_location(
             )?;
         }
         if rescan {
-            rescan_location(&db.conn, location_id)?;
+            mention_index::invalidate_cache();
+            rebuild_all_mentions(&db.conn, None)?;
         }
         Ok(())
     })
@@ -624,6 +755,8 @@ pub fn delete_location(state: State<'_, AppState>, location_id: i64) -> Result<(
         if n == 0 {
             return Err(AppError::Msg("地点不存在".into()));
         }
+        mention_index::invalidate_cache();
+        rebuild_all_mentions(&db.conn, None)?;
         Ok(())
     })
 }
@@ -646,50 +779,51 @@ pub fn get_chapter_presence(
             )
             .map_err(|_| AppError::Msg("章节不存在".into()))?;
 
-        let mut characters: Vec<EntityMentionView> = {
-            let mut stmt = db
-                .conn
-                .prepare("SELECT id, name, aliases, exclude_words FROM characters")?;
+        // 全局匹配器：与统计口径一致，避免本章出场也出现跨角色双计数
+        let char_entities = load_char_entities(&db.conn)?;
+        let char_names: std::collections::HashMap<i64, String> = {
+            let mut stmt = db.conn.prepare("SELECT id, name FROM characters")?;
             let rows = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                    ))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows.into_iter()
-                .map(|(id, name, aliases, exclude_words)| EntityMentionView {
-                    id,
-                    mention_count: count_occurrences_with_exclusions(
-                        &content,
-                        &character_patterns(&name, &parse_aliases(&aliases)),
-                        &parse_exclude_words(&exclude_words),
-                    ) as i64,
-                    name,
-                })
-                .filter(|m| m.mention_count > 0)
-                .collect()
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<std::result::Result<_, _>>()?;
+            rows
         };
-        characters.sort_by(|a, b| b.mention_count.cmp(&a.mention_count));
-
-        let mut locations: Vec<EntityMentionView> = {
+        let loc_entities = load_loc_entities(&db.conn)?;
+        let loc_names: std::collections::HashMap<i64, String> = {
             let mut stmt = db.conn.prepare("SELECT id, name FROM locations")?;
             let rows = stmt
                 .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows.into_iter()
-                .map(|(id, name)| EntityMentionView {
-                    id,
-                    mention_count: count_occurrences(&content, &[name.clone()]) as i64,
-                    name,
-                })
-                .filter(|m| m.mention_count > 0)
-                .collect()
+                .collect::<std::result::Result<_, _>>()?;
+            rows
         };
-        locations.sort_by(|a, b| b.mention_count.cmp(&a.mention_count));
+        let (char_m, loc_m) = mention_index::matchers_for(char_entities, loc_entities);
+        let mut characters: Vec<EntityMentionView> = char_m
+            .count(&content)
+            .into_iter()
+            .filter(|(_, n)| *n > 0)
+            .filter_map(|(id, n)| {
+                char_names.get(&id).map(|name| EntityMentionView {
+                    id,
+                    mention_count: n,
+                    name: name.clone(),
+                })
+            })
+            .collect();
+        characters.sort_by_key(|a| std::cmp::Reverse(a.mention_count));
+
+        let mut locations: Vec<EntityMentionView> = loc_m
+            .count(&content)
+            .into_iter()
+            .filter(|(_, n)| *n > 0)
+            .filter_map(|(id, n)| {
+                loc_names.get(&id).map(|name| EntityMentionView {
+                    id,
+                    mention_count: n,
+                    name: name.clone(),
+                })
+            })
+            .collect();
+        locations.sort_by_key(|a| std::cmp::Reverse(a.mention_count));
 
         Ok(ChapterPresenceView {
             chapter_id,
@@ -699,92 +833,159 @@ pub fn get_chapter_presence(
     })
 }
 
-/// 全量重建提及统计（后台线程计算计数，主线程短事务写入）。
-/// 用于 V3 迁移后的首次打开、或统计口径异常时的兜底修复。
+/// 别名 / 称谓冲突项：同一称谓被多张人物卡声明时，全局匹配只能归属其一，
+/// 需要作者明确裁决归属（审查 P1-4）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AliasConflict {
+    /// 冲突的共享称谓
+    pub label: String,
+    /// 涉及的人物卡 id（按 id 升序）
+    pub character_ids: Vec<i64>,
+    /// 对应的人物名（与 character_ids 一一对应）
+    pub character_names: Vec<String>,
+}
+
+/// 检测全书人物之间重名 / 共享别名的冲突，供前端提示作者裁决归属。
+#[tauri::command]
+pub fn get_alias_conflicts(state: State<'_, AppState>) -> Result<Vec<AliasConflict>> {
+    state.with_project(|db| {
+        let entities = load_char_entities(&db.conn)?;
+        let id_name: std::collections::HashMap<i64, String> = {
+            let mut stmt = db.conn.prepare("SELECT id, name FROM characters")?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<std::result::Result<_, _>>()?;
+            rows
+        };
+        let matcher = MentionMatcher::build(&entities);
+        let mut out = Vec::new();
+        for (label, a, b) in matcher.conflicts {
+            let ids = vec![a, b];
+            let names = ids
+                .iter()
+                .map(|id| id_name.get(id).cloned().unwrap_or_default())
+                .collect();
+            out.push(AliasConflict {
+                label,
+                character_ids: ids,
+                character_names: names,
+            });
+        }
+        out.sort_by(|x, y| x.label.cmp(&y.label));
+        Ok(out)
+    })
+}
+
+/// 单章重建计划：(章id, 内容指纹, 人物命中, 地点命中)
+type ChapterMentionPlan = (i64, String, Vec<(i64, i64)>, Vec<(i64, i64)>);
+
+/// 增量重建提及统计（审查 P1-3）。
+///
+/// 旧实现「先 DELETE 全表再写回」，且每次打开项目无条件全书重建；
+/// 重建期间的新保存会被迟到的旧结果覆盖。现在：
+///   1. 后台线程用全局匹配器按章计算（不碰 DB）；
+///   2. 写回时逐章二次核对 content_hash——内容已变（期间被保存）则跳过该章，
+///      绝不用旧快照覆盖新保存；
+///   3. 只逐章替换，从不全表删除；软删章清空其残留提及。
 #[tauri::command]
 pub async fn rebuild_mentions(state: State<'_, AppState>) -> Result<i64> {
-    // 第一阶段：读全量数据（同步，持锁时间短）
-    let (chapters, characters, locations) = state.with_project(|db| {
-        let chapters: Vec<(i64, String)> = {
-            let mut stmt = db.conn.prepare("SELECT id, content FROM chapters WHERE deleted_at IS NULL")?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
-        };
-        let characters: Vec<(i64, Vec<String>, Vec<String>)> = {
-            let mut stmt = db.conn.prepare("SELECT id, name, aliases, exclude_words FROM characters")?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        character_patterns(
-                            &r.get::<_, String>(1)?,
-                            &parse_aliases(&r.get::<_, String>(2)?),
-                        ),
-                        parse_exclude_words(&r.get::<_, String>(3)?),
-                    ))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
-        };
-        let locations: Vec<(i64, String)> = {
-            let mut stmt = db.conn.prepare("SELECT id, name FROM locations")?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
-        };
-        Ok((chapters, characters, locations))
+    use crate::mention_index::MentionMatcher;
+
+    // 第一阶段：读实体词 + 全部未删章（带内容指纹）
+    let (chars, locs, chapters) = state.with_project(|db| {
+        let chars = load_char_entities(&db.conn)?;
+        let locs = load_loc_entities(&db.conn)?;
+        let mut stmt = db.conn.prepare(
+            "SELECT c.id, c.content, COALESCE(c.content_hash,'')
+             FROM chapters c
+             LEFT JOIN mention_index_state s ON s.chapter_id = c.id
+             WHERE c.deleted_at IS NULL
+               AND (s.chapter_id IS NULL OR s.content_hash <> COALESCE(c.content_hash,''))",
+        )?;
+        let chapters = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok((chars, locs, chapters))
     })?;
 
-    // 第二阶段：后台线程精确匹配计数（不碰 DB）
-    let (char_hits, loc_hits) = tauri::async_runtime::spawn_blocking(move || {
-        let mut char_hits: Vec<(i64, i64, i64)> = Vec::new();
-        for (cid, pats, excludes) in &characters {
-            for (ch_id, content) in &chapters {
-                let n = count_occurrences_with_exclusions(content, pats, excludes);
-                if n > 0 {
-                    char_hits.push((*cid, *ch_id, n as i64));
-                }
-            }
+    // 第二阶段：后台计算（全局匹配器，每章只扫一次）
+    let plan = tauri::async_runtime::spawn_blocking(move || {
+        let cm = MentionMatcher::build(&chars);
+        let lm = MentionMatcher::build(&locs);
+        let mut plan: Vec<ChapterMentionPlan> = Vec::new();
+        for (ch_id, content, hash) in chapters {
+            let ch = cm
+                .count(&content)
+                .into_iter()
+                .filter(|(_, n)| *n > 0)
+                .collect();
+            let lh = lm
+                .count(&content)
+                .into_iter()
+                .filter(|(_, n)| *n > 0)
+                .collect();
+            plan.push((ch_id, hash, ch, lh));
         }
-        let mut loc_hits: Vec<(i64, i64, i64)> = Vec::new();
-        for (lid, name) in &locations {
-            for (ch_id, content) in &chapters {
-                let n = count_occurrences(content, std::slice::from_ref(name));
-                if n > 0 {
-                    loc_hits.push((*lid, *ch_id, n as i64));
-                }
-            }
-        }
-        (char_hits, loc_hits)
+        plan
     })
     .await
     .map_err(|e| AppError::Msg(format!("统计任务失败：{e}")))?;
 
-    // 第三阶段：短事务写入
-    let total = (char_hits.len() + loc_hits.len()) as i64;
+    // 第三阶段：逐章写回，写入前二次核对指纹，变了就跳过（不覆盖新保存）
     state.with_project(|db| {
+        let mut refreshed = 0i64;
         let tx = db.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM character_mentions", [])?;
-        tx.execute("DELETE FROM location_mentions", [])?;
-        for (cid, ch_id, n) in &char_hits {
+        for (ch_id, hash, char_hits, loc_hits) in plan {
+            let cur: Option<String> = tx
+                .query_row(
+                    "SELECT content_hash FROM chapters WHERE id = ?1 AND deleted_at IS NULL",
+                    params![ch_id],
+                    |r| r.get(0),
+                )
+                .ok();
+            let Some(cur_hash) = cur else {
+                // 章已被删除：清掉它的残留提及与索引状态
+                tx.execute("DELETE FROM character_mentions WHERE chapter_id = ?1", params![ch_id])?;
+                tx.execute("DELETE FROM location_mentions WHERE chapter_id = ?1", params![ch_id])?;
+                tx.execute("DELETE FROM mention_index_state WHERE chapter_id = ?1", params![ch_id])?;
+                continue;
+            };
+            if cur_hash != hash {
+                // 期间被重新保存过，本次结果过期，跳过留给下一次增量
+                continue;
+            }
+            tx.execute("DELETE FROM character_mentions WHERE chapter_id = ?1", params![ch_id])?;
+            tx.execute("DELETE FROM location_mentions WHERE chapter_id = ?1", params![ch_id])?;
+            for (cid, n) in &char_hits {
+                tx.execute(
+                    "INSERT INTO character_mentions (character_id, chapter_id, mention_count)
+                     VALUES (?1, ?2, ?3)",
+                    params![cid, ch_id, n],
+                )?;
+            }
+            for (lid, n) in &loc_hits {
+                tx.execute(
+                    "INSERT INTO location_mentions (location_id, chapter_id, mention_count)
+                     VALUES (?1, ?2, ?3)",
+                    params![lid, ch_id, n],
+                )?;
+            }
             tx.execute(
-                "INSERT INTO character_mentions (character_id, chapter_id, mention_count)
-                 VALUES (?1, ?2, ?3)",
-                params![cid, ch_id, n],
+                "INSERT INTO mention_index_state (chapter_id, content_hash) VALUES (?1, ?2)
+                 ON CONFLICT(chapter_id) DO UPDATE SET content_hash = excluded.content_hash",
+                params![ch_id, cur_hash],
             )?;
-        }
-        for (lid, ch_id, n) in &loc_hits {
-            tx.execute(
-                "INSERT INTO location_mentions (location_id, chapter_id, mention_count)
-                 VALUES (?1, ?2, ?3)",
-                params![lid, ch_id, n],
-            )?;
+            refreshed += 1;
         }
         tx.commit()?;
-        Ok(total)
+        Ok(refreshed)
     })
 }
 
@@ -867,7 +1068,7 @@ mod tests {
             [],
         )
         .unwrap();
-        rescan_character(&conn, 1).unwrap();
+        rebuild_all_mentions(&conn, None).unwrap();
 
         let profiles = build_character_profiles(&conn).unwrap();
         assert_eq!(profiles.len(), 1);
@@ -876,6 +1077,62 @@ mod tests {
         assert_eq!(p.chapter_count, 2);
         assert_eq!(p.first_chapter_title.as_deref(), Some("第一章"));
         assert_eq!(p.last_chapter_title.as_deref(), Some("第二章"));
+    }
+
+    #[test]
+    fn nested_character_names_not_double_counted() {
+        // 审查 P1-4：「苏婉」与「苏婉清」并存时，苏婉清不得被两人各计一次
+        let conn = fixture_db();
+        conn.execute(
+            "UPDATE chapters SET content = '苏婉清来了。苏婉走了。' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO characters (id, name, status) VALUES (1, '苏婉', 1), (2, '苏婉清', 1)",
+            [],
+        )
+        .unwrap();
+        rebuild_all_mentions(&conn, None).unwrap();
+        let n1: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(mention_count),0) FROM character_mentions WHERE character_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let n2: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(mention_count),0) FROM character_mentions WHERE character_id = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n1, 1, "独立的「苏婉」只计 1 次");
+        assert_eq!(n2, 1, "「苏婉清」只归苏婉清，计 1 次");
+    }
+
+    #[test]
+    fn soft_deleted_chapter_excluded_from_aggregation() {
+        // 审查 P1-3：回收站章节不计入角色卡聚合
+        let conn = fixture_db();
+        conn.execute(
+            "INSERT INTO characters (id, name, status) VALUES (1, '林默', 1)",
+            [],
+        )
+        .unwrap();
+        rebuild_all_mentions(&conn, None).unwrap();
+        assert_eq!(
+            build_character_profiles(&conn).unwrap()[0].total_mentions,
+            3
+        );
+        // 软删第 2 章并即时清空其提及
+        conn.execute("UPDATE chapters SET deleted_at = datetime('now') WHERE id = 2", [])
+            .unwrap();
+        rebuild_all_mentions(&conn, Some(2)).unwrap();
+        let p = &build_character_profiles(&conn).unwrap()[0];
+        assert_eq!(p.total_mentions, 1, "只剩第 1 章的 1 次");
+        assert_eq!(p.chapter_count, 1);
     }
 
     #[test]
@@ -902,5 +1159,84 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// 造 N 个角色
+    fn seed_characters(conn: &Connection, n: i64) {
+        for i in 0..n {
+            conn.execute(
+                "INSERT INTO characters (id, name, status) VALUES (?1, ?2, 1)",
+                params![i, format!("角色{i:03}")],
+            )
+            .unwrap();
+        }
+    }
+
+    /// 性能基准 A（审查 P1-5，保存路径）：典型单章约 6000 字 + 500 角色，
+    /// 保存事务内的单章提及重算必须 < 100ms。
+    /// `cargo test benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore = "性能基准，手动运行"]
+    fn mention_benchmark_single_chapter_save_under_100ms() {
+        use std::time::Instant;
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::migrations::apply(&conn).unwrap();
+        conn.execute("INSERT INTO volumes (id, title) VALUES (1, '正文')", [])
+            .unwrap();
+        seed_characters(&conn, 500);
+        // 约 6000 字的一章，穿插约 280 个角色名
+        let mut content = String::new();
+        let mut i = 0i64;
+        while content.chars().count() < 6000 {
+            content.push_str(&format!("角色{i:03}走过长街，风起云涌，山河浩荡。"));
+            i = (i + 1) % 500;
+        }
+        conn.execute(
+            "INSERT INTO chapters (id, volume_id, title, content, sort_order) VALUES (1,1,'章',?1,0)",
+            params![content],
+        )
+        .unwrap();
+        // 预热（构建并缓存匹配器）
+        let tx = conn.unchecked_transaction().unwrap();
+        update_chapter_mentions(&tx, 1, &content).unwrap();
+        tx.commit().unwrap();
+        // 计时：缓存命中的保存路径
+        let tx = conn.unchecked_transaction().unwrap();
+        let t = Instant::now();
+        update_chapter_mentions(&tx, 1, &content).unwrap();
+        let ms = t.elapsed().as_millis();
+        tx.commit().unwrap();
+        println!("6000字单章/500角色 保存重算耗时 {ms}ms");
+        assert!(ms < 100, "单章保存提及重算应 < 100ms，实际 {ms}ms");
+    }
+
+    /// 性能基准 B（压力项）：100 万字全书 + 500 角色的全量重建吞吐上限。
+    /// 这是「打开项目兜底重建」量级，不是单次保存；给一个宽松回归上限。
+    #[test]
+    #[ignore = "性能基准，手动运行"]
+    fn mention_benchmark_whole_book_1m_throughput() {
+        use std::time::Instant;
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::migrations::apply(&conn).unwrap();
+        conn.execute("INSERT INTO volumes (id, title) VALUES (1, '正文')", [])
+            .unwrap();
+        seed_characters(&conn, 500);
+        let mut content = String::with_capacity(1_100_000);
+        let mut i = 0i64;
+        while content.chars().count() < 1_000_000 {
+            content.push_str(&format!("角色{i:03}走过长街，风起云涌，山河浩荡。"));
+            i = (i + 1) % 500;
+        }
+        conn.execute(
+            "INSERT INTO chapters (id, volume_id, title, content, sort_order) VALUES (1,1,'长章',?1,0)",
+            params![content],
+        )
+        .unwrap();
+        rebuild_all_mentions(&conn, None).unwrap(); // 预热编译
+        let t = Instant::now();
+        rebuild_all_mentions(&conn, None).unwrap();
+        let ms = t.elapsed().as_millis();
+        println!("100万字全书/500角色 全量重建耗时 {ms}ms");
+        assert!(ms < 1000, "100万字全量重建应 < 1000ms，实际 {ms}ms");
     }
 }

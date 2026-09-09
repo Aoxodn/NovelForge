@@ -128,6 +128,7 @@ pub fn list_all_character_relations(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_character_relation(
     state: State<'_, AppState>,
     from_char: i64,

@@ -30,7 +30,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// 检测出的章节块（段落区间）
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChapterBlock {
     pub title: String,
     /// 起始段落索引（含标题段自身）
@@ -248,7 +248,7 @@ fn classify(p: &ImportedParagraph, idx: usize) -> Option<Candidate> {
         rule = "中文数字";
         number = n;
         strong = false;
-    } else if p.centered && (p.bold || p.font_size.map_or(false, |s| s >= 14.0)) {
+    } else if p.centered && (p.bold || p.font_size.is_some_and(|s| s >= 14.0)) {
         score = 0.70;
         rule = "居中加粗标题";
         number = None;
@@ -264,7 +264,7 @@ fn classify(p: &ImportedParagraph, idx: usize) -> Option<Candidate> {
     if p.bold {
         score += 0.03;
     }
-    if p.font_size.map_or(false, |s| s >= 14.0) {
+    if p.font_size.is_some_and(|s| s >= 14.0) {
         score += 0.05;
     }
     if score > 1.0 {
@@ -332,11 +332,11 @@ pub fn detect(paras: &[ImportedParagraph]) -> Vec<ChapterBlock> {
             .iter()
             .rev()
             .find_map(|c| c.number)
-            .map_or(false, |p| p < n);
+            .is_some_and(|p| p < n);
         let next = cands[i + 1..]
             .iter()
             .find_map(|c| c.number)
-            .map_or(false, |x| x > n);
+            .is_some_and(|x| x > n);
         if prev || next {
             cands[i].score = (cands[i].score + 0.30).min(1.0);
             cands[i].chain_supported = true;

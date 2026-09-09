@@ -26,6 +26,8 @@ pub fn open_project_db(db_path: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)?;
     }
     let conn = Connection::open(db_path)?;
+    // 锁等待 5s：WAL + 多连接刷新场景下避免立即 database is locked（审查 P2-2）
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     // NORMAL：WAL 模式下的性能与安全平衡点

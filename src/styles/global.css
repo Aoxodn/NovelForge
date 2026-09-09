@@ -337,6 +337,14 @@ button:active:not(:disabled) {
 .editor-mirror-inner {
   white-space: pre-wrap;
   overflow-wrap: break-word;
+  /* 与 textarea 严格一致的排版度量（审查 UX-1），保证折行点逐行对齐 */
+  word-break: break-word;
+  letter-spacing: normal;
+  tab-size: 2;
+  text-indent: 0;
+  padding: 0;
+  margin: 0;
+  box-sizing: border-box;
   will-change: transform;
 }
 .editor-mirror .para-dim {
@@ -742,6 +750,12 @@ button:active:not(:disabled) {
   box-sizing: border-box;
   white-space: pre-wrap;
   overflow-wrap: break-word;
+  /* 与镜像层严格一致的排版度量，杜绝双层漂移（审查 UX-1） */
+  word-break: break-word;
+  letter-spacing: normal;
+  tab-size: 2;
+  text-indent: 0;
+  font-variant-numeric: normal;
   line-height: inherit;
 }
 .editor-textarea::placeholder {
@@ -4246,4 +4260,398 @@ select option,
 }
 .volume-row.drop-after::after {
   bottom: -1px;
+}
+
+
+/* 草稿保存失败固定错误条（审查 P0-2） */
+.char-error-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: rgba(226, 91, 91, 0.1);
+  border: 1px solid rgba(226, 91, 91, 0.4);
+  color: #e25b5b;
+  font-size: 12px;
+}
+
+
+/* 抽屉内草稿保存失败固定提示（审查 P0-2） */
+.draft-error-line {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(226, 91, 91, 0.1);
+  border: 1px solid rgba(226, 91, 91, 0.35);
+  color: #e25b5b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+
+/* ---------- 画布通用：面包屑 / 帮助 / 轴约定（审查 UX-2） ---------- */
+.canvas-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.canvas-breadcrumb .cb-sep {
+  margin: 0 2px;
+  color: var(--text-faint);
+}
+.canvas-breadcrumb .cb-link {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+}
+.canvas-breadcrumb .cb-link:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+}
+.canvas-breadcrumb .cb-current {
+  color: var(--text-main, var(--editor-text));
+  font-weight: 600;
+}
+.canvas-breadcrumb .cb-link-static {
+  color: var(--text-faint);
+}
+.canvas-axis-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.canvas-help {
+  position: relative;
+}
+.canvas-help-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  width: 280px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--bg-panel, #fff);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+  padding: 12px 14px;
+}
+.canvas-help-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.canvas-help-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.canvas-help-panel li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary, var(--text-faint));
+}
+.canvas-help-panel kbd {
+  flex: 0 0 auto;
+  min-width: 56px;
+  text-align: center;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  color: var(--editor-text);
+}
+.canvas-help-close {
+  margin-top: 10px;
+  width: 100%;
+}
+
+
+/* ---------- 角色群像扩展（审查 UX-3） ---------- */
+.char-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 10px;
+  margin: 10px 0 4px;
+}
+.char-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.char-field-wide {
+  grid-column: span 2;
+}
+.char-field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-start;
+}
+.char-field input[type='checkbox'] {
+  margin: 0;
+}
+.char-field input,
+.char-field select {
+  font-size: 13px;
+  padding: 5px 8px;
+}
+.char-pov-badge,
+.char-dead-badge {
+  display: inline-block;
+  margin-left: 4px;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  font-size: 10px;
+  border-radius: 50%;
+  color: #fff;
+}
+.char-pov-badge {
+  background: var(--accent);
+}
+.char-dead-badge {
+  background: #8a8f99;
+}
+.char-conflict-banner {
+  margin: 6px 10px 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+  background: rgba(234, 102, 104, 0.12);
+  color: #c05052;
+  border: 1px solid rgba(234, 102, 104, 0.3);
+  cursor: help;
+}
+.char-custom-area {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.char-custom-row {
+  display: flex;
+  gap: 8px;
+}
+.char-custom-key {
+  flex: 0 0 34%;
+}
+.char-custom-val {
+  flex: 1;
+}
+@media (max-width: 900px) {
+  .char-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+
+/* ---------- 写作工具：改名 / 连续性 / 修订 / 弧光 / 场景板（审查新增功能） ---------- */
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.tool-label {
+  flex: 0 0 48px;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+.tool-row .input {
+  flex: 1;
+}
+.tool-spacer {
+  flex: 1;
+}
+.tool-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-faint);
+  margin: 6px 0 10px;
+}
+.tool-hint-inline {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.tool-check,
+.tool-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+.tool-inline input {
+  width: 56px;
+  padding: 3px 6px;
+}
+.tool-text-btn {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.tool-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.tool-tabs button {
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+.tool-tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tool-hit-list,
+.issue-list,
+.arc-list,
+.scene-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.tool-hit-summary {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.tool-hit,
+.issue-card,
+.arc-card,
+.scene-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--card-soft, rgba(127, 127, 127, 0.05));
+  cursor: default;
+}
+.tool-hit {
+  cursor: pointer;
+}
+.tool-hit-head,
+.issue-head,
+.arc-card-head,
+.scene-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.tool-hit-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--accent);
+}
+.tool-snippet {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.issue-card {
+  cursor: pointer;
+}
+.issue-kind {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--accent-soft, rgba(127, 127, 127, 0.15));
+  color: var(--accent);
+}
+.issue-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.issue-detail {
+  margin: 6px 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.issue-actions {
+  display: flex;
+  gap: 6px;
+}
+.issue-dead_reappear .issue-kind {
+  background: rgba(234, 102, 104, 0.15);
+  color: #d05a5c;
+}
+.issue-foreshadow_overdue .issue-kind {
+  background: rgba(250, 173, 20, 0.15);
+  color: #c98a12;
+}
+.arc-index {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.arc-card-head select {
+  flex: 1;
+  padding: 3px 6px;
+}
+.arc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.arc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.arc-field textarea {
+  resize: vertical;
+  font-size: 13px;
+}
+.scene-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+.scene-meta-grid input {
+  padding: 4px 8px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.scene-content {
+  width: 100%;
+  margin-top: 6px;
+  resize: vertical;
+  font-size: 13px;
 }

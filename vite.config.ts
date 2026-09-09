@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -16,5 +17,10 @@ export default defineConfig({
   build: {
     target: "chrome105",
     outDir: "dist",
+  },
+  test: {
+    // 纯逻辑单测（store / util / api 归一化），无需 DOM 环境
+    environment: "node",
+    include: ["src/**/*.test.ts"],
   },
 });

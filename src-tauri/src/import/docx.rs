@@ -125,7 +125,7 @@ fn handle_attrs(
 ) {
     match e.name().local_name().as_ref() {
         "jc" => {
-            if attr_value(e).map_or(false, |v| v == "center") {
+            if attr_value(e).is_some_and(|v| v == "center") {
                 *centered = true;
             }
         }
@@ -143,7 +143,7 @@ fn handle_attrs(
             // w:sz 单位为半点（half-points）：val="32" → 16pt
             if let Some(v) = attr_value(e).and_then(|s| s.parse::<f32>().ok()) {
                 let pt = v / 2.0;
-                if max_font.map_or(true, |m| pt > m) {
+                if max_font.is_none_or(|m| pt > m) {
                     *max_font = Some(pt);
                 }
             }

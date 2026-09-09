@@ -9,6 +9,7 @@ import { useAppStore } from '../store/appStore';
 import { useEditorStore } from '../store/editorStore';
 import type { SearchHit } from '../types/models';
 import { IconSearch } from './icons';
+import { RequestSeq } from '../utils/RequestSeq';
 
 export function SearchPanel({ onClose }: { onClose: () => void }) {
   const showToast = useAppStore((s) => s.showToast);
@@ -19,6 +20,8 @@ export function SearchPanel({ onClose }: { onClose: () => void }) {
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // 请求序号：丢弃迟到的旧查询结果，避免后发先至覆盖新结果（审查 P1-6）
+  const reqSeq = useRef(new RequestSeq());
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -28,29 +31,34 @@ export function SearchPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const q = query.trim();
     if (!q) {
+      reqSeq.current.invalidate();
       setHits(null);
       setSearching(false);
       return;
     }
     setSearching(true);
+    const mySeq = reqSeq.current.next();
     const timer = setTimeout(async () => {
       try {
         const res = await api.searchProject(q, useRegex);
+        if (!reqSeq.current.isLatest(mySeq)) return; // 只接受最新请求
         setHits(res);
       } catch (e) {
+        if (!reqSeq.current.isLatest(mySeq)) return;
         showToast(String(e), 'error');
         setHits([]);
       } finally {
-        setSearching(false);
+        if (reqSeq.current.isLatest(mySeq)) setSearching(false);
       }
     }, 350);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, useRegex]);
 
-  const jumpTo = (chapterId: number) => {
+  const jumpTo = async (chapterId: number) => {
+    const ok = await useEditorStore.getState().loadChapter(chapterId);
+    if (!ok) return;
     selectChapter(chapterId);
-    void useEditorStore.getState().loadChapter(chapterId);
     onClose();
   };
 

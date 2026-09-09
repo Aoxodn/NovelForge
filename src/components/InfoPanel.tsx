@@ -7,11 +7,12 @@
  * - 本章发展卡（V6：故事图单章上下文——上下游 / 伏笔 / 弧线）
  * - 版本历史卡（chapter_versions 快照浏览与恢复）
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import * as api from '../api';
 import { useAppStore } from '../store/appStore';
 import { useEditorStore } from '../store/editorStore';
 import { useCountUp } from '../hooks/useCountUp';
+import { useDurableDraft } from '../hooks/useDurableDraft';
 import type { ChapterPresenceView, ChapterStoryContext, ChapterVersionMeta } from '../types/models';
 import { fmt } from '../utils/text';
 import { countParagraphs, readingMinutes } from '../utils/text';
@@ -47,9 +48,10 @@ export function InfoPanel() {
   const selectChapter = useAppStore((s) => s.selectChapter);
 
   /** 跳到某章正文（卷内前后章 / 伏笔章级锚点） */
-  const openChapterInEditor = (id: number) => {
+  const openChapterInEditor = async (id: number) => {
+    const ok = await useEditorStore.getState().loadChapter(id);
+    if (!ok) return;
     selectChapter(id);
-    void useEditorStore.getState().loadChapter(id);
     setViewMode('editor');
   };
 
@@ -59,60 +61,49 @@ export function InfoPanel() {
     else focusMapNode(volumeId);
   };
 
-  // ---------- 本章纲要：切换章节载入，输入后 600ms 防抖自动保存 ----------
-  const [chSummary, setChSummary] = useState('');
-  const [chNotes, setChNotes] = useState('');
-  const [loadedId, setLoadedId] = useState<number | null>(null);
-  const [outlineState, setOutlineState] = useState<OutlineSaveState>('idle');
-  const chDirtyRef = useRef(false);
+  // ---------- 本章纲要：可靠草稿，切换章节自动 flush，600ms 防抖自动保存 ----------
+  const {
+    draft: outlineDraft,
+    setDraft: setOutlineDraft,
+    reset: resetOutline,
+    saving: outlineSaving,
+    error: outlineError,
+    dirty: outlineDirty,
+  } = useDurableDraft<{ summary: string; notes: string }>(
+    chapterId,
+    { summary: '', notes: '' },
+    async (id, d) => {
+      await api.setChapterOutline(id, d.summary, d.notes);
+    },
+    600,
+  );
+  const chSummary = outlineDraft.summary;
+  const chNotes = outlineDraft.notes;
 
   useEffect(() => {
-    if (chapterId === null) {
-      setLoadedId(null);
-      return;
-    }
+    if (chapterId === null) return;
     let cancelled = false;
     api
       .getChapter(chapterId)
       .then((c) => {
         if (cancelled) return;
-        setChSummary(c.summary);
-        setChNotes(c.notes);
-        setLoadedId(chapterId);
-        chDirtyRef.current = false;
-        setOutlineState('idle');
+        resetOutline({ summary: c.summary, notes: c.notes });
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [chapterId]);
+  }, [chapterId, resetOutline]);
 
-  useEffect(() => {
-    if (chapterId === null || chapterId !== loadedId || !chDirtyRef.current) return;
-    const t = setTimeout(async () => {
-      setOutlineState('saving');
-      try {
-        await api.setChapterOutline(chapterId, chSummary, chNotes);
-        chDirtyRef.current = false;
-        setOutlineState('saved');
-      } catch {
-        setOutlineState('error');
-      }
-    }, 600);
-    return () => clearTimeout(t);
-  }, [chSummary, chNotes, chapterId, loadedId]);
-
-  const editChSummary = (v: string) => {
-    chDirtyRef.current = true;
-    setChSummary(v);
-    setOutlineState('idle');
-  };
-  const editChNotes = (v: string) => {
-    chDirtyRef.current = true;
-    setChNotes(v);
-    setOutlineState('idle');
-  };
+  const editChSummary = (v: string) => setOutlineDraft({ summary: v });
+  const editChNotes = (v: string) => setOutlineDraft({ notes: v });
+  const outlineState: OutlineSaveState = outlineError
+    ? 'error'
+    : outlineSaving
+      ? 'saving'
+      : outlineDirty
+        ? 'idle'
+        : 'saved';
 
   const refreshVersions = useCallback(async () => {
     if (chapterId === null) {
@@ -184,7 +175,7 @@ export function InfoPanel() {
     setRestoring(true);
     try {
       await api.restoreChapterVersion(chapterId, versionId);
-      await useEditorStore.getState().loadChapter(chapterId);
+      await useEditorStore.getState().loadChapter(chapterId, true);
       await refreshVersions();
       await refreshTree();
       showToast('已恢复到历史版本');

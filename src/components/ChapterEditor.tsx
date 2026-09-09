@@ -11,6 +11,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { writeText as writeClipboard } from '@tauri-apps/plugin-clipboard-manager';
+import { splitActiveParagraph } from '../utils/paragraphs';
 import { useAppStore } from '../store/appStore';
 import { useEditorStore } from '../store/editorStore';
 import { useAutoSave } from '../hooks/useAutoSave';
@@ -111,23 +112,10 @@ export function ChapterEditor() {
   // ---------- 专注模式：镜像层 ----------
 
   // 按光标位置切分段落：返回每段的起止与激活段下标
-  const { paras, activeIdx, caretOff } = useMemo(() => {
-    const list = content.split('\n');
-    let acc = 0;
-    let idx = list.length - 1;
-    let off = list[list.length - 1]?.length ?? 0;
-    for (let i = 0; i < list.length; i++) {
-      const start = acc;
-      const end = acc + list[i].length;
-      if (caret >= start && caret <= end) {
-        idx = i;
-        off = caret - start;
-        break;
-      }
-      acc = end + 1; // +1 为换行符
-    }
-    return { paras: list, activeIdx: idx, caretOff: off };
-  }, [content, caret]);
+  const { paras, activeIdx, caretOff } = useMemo(
+    () => splitActiveParagraph(content, caret),
+    [content, caret],
+  );
 
   // 镜像层内容：激活段高亮、其余淡化，光标处插入探针（用于测量垂直位置）
   const mirrorNodes = useMemo(() => {
@@ -155,14 +143,39 @@ export function ChapterEditor() {
 
   // 打字机滚动：把探针行固定在视口 42% 高度处；滚动时同步镜像层位移。
   // 注意：正文滚动发生在 textarea 内部（编辑器页高 100%），镜像层必须跟随其 scrollTop。
+  // 双层排版漂移根因（审查 UX-1）：textarea 出现纵向滚动条后 clientWidth 会比
+  // 铺满容器的镜像层窄一个滚动条宽度，长中文折行点因此不同、逐行累积错位
+  // （点第二行却高亮第一行）。这里把镜像层宽度严格锁成 textarea.clientWidth。
+  const alignMirrorSize = () => {
+    const mirror = mirrorRef.current;
+    const ta = textareaRef.current;
+    if (!mirror || !ta) return;
+    mirror.style.width = `${ta.clientWidth}px`; // clientWidth 已扣除滚动条
+    mirror.style.left = '0';
+    mirror.style.right = 'auto';
+  };
+
   const syncMirror = () => {
     if (!focusMode) return;
     const mirror = mirrorRef.current;
     const ta = textareaRef.current;
     if (!mirror || !ta) return;
+    alignMirrorSize();
     const inner = mirror.firstElementChild as HTMLElement | null;
     if (inner) inner.style.transform = `translateY(${-ta.scrollTop}px)`;
   };
+
+  // 监听 textarea 尺寸变化（窗口缩放 / 专注切换 / 滚动条出现），持续对齐镜像宽度
+  useLayoutEffect(() => {
+    if (!focusMode) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    alignMirrorSize();
+    const ro = new ResizeObserver(() => alignMirrorSize());
+    ro.observe(ta);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusMode]);
 
   useLayoutEffect(() => {
     if (!focusMode) return;

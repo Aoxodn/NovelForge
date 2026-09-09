@@ -37,6 +37,46 @@ pub fn move_chapter_node(
     })
 }
 
+/// 单个节点的画布坐标（批量移动用）
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodePosition {
+    pub chapter_id: i64,
+    pub map_x: f64,
+    pub map_y: f64,
+}
+
+/// 批量保存章节画布坐标（小节整体拖动 / 多选拖动）。
+/// 单事务一次提交，避免逐章 IPC 失败留下半移动状态（审查 P2-1）。
+#[tauri::command]
+pub fn move_chapter_nodes(
+    state: State<'_, AppState>,
+    positions: Vec<NodePosition>,
+) -> Result<usize> {
+    if positions.is_empty() {
+        return Ok(0);
+    }
+    state.with_project(|db| {
+        let tx = db.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE chapters SET map_x = ?1, map_y = ?2,
+                     updated_at = datetime('now','localtime')
+                 WHERE id = ?3 AND deleted_at IS NULL",
+            )?;
+            for p in &positions {
+                stmt.execute(params![
+                    p.map_x.clamp(-0.5, 1.5),
+                    p.map_y.clamp(-0.5, 1.5),
+                    p.chapter_id
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(positions.len())
+    })
+}
+
 // ---------- 章间连线 ----------
 
 const EDGE_TYPE_RANGE: std::ops::RangeInclusive<i32> = 0..=6;
@@ -61,19 +101,33 @@ fn fetch_chapter_edge(conn: &Connection, id: i64) -> Result<ChapterEdge> {
     .map_err(|_| AppError::Msg("章间连线不存在".into()))
 }
 
-/// 校验两章节存活且同卷（章间连线不跨卷；跨卷关系走 L1 卷级边）
+/// 校验两章节存活且同卷（章间连线不跨卷；跨卷关系走 L1 卷级边）。
+/// 分别查询两个端点，明确断言两行都存在且 volume_id 相同
+///（旧实现 GROUP BY 后只读首行，两章分属不同卷时仍会误判通过——审查 P1-1）。
 fn validate_same_volume(conn: &Connection, a: i64, b: i64) -> Result<i64> {
     if a == b {
         return Err(AppError::Msg("连线两端不能是同一章".into()));
     }
-    conn.query_row(
-        "SELECT volume_id FROM chapters
-         WHERE id IN (?1, ?2) AND deleted_at IS NULL
-         GROUP BY volume_id",
-        params![a, b],
-        |r| r.get::<_, i64>(0),
-    )
-    .map_err(|_| AppError::Msg("章节不存在，或两章不在同一卷".into()))
+    let fetch_vol = |id: i64| -> Result<Option<i64>> {
+        let vol = conn.query_row(
+            "SELECT volume_id FROM chapters WHERE id = ?1 AND deleted_at IS NULL",
+            params![id],
+            |r| r.get::<_, i64>(0),
+        );
+        match vol {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    };
+    let va = fetch_vol(a)?
+        .ok_or_else(|| AppError::Msg("章节不存在，或两章不在同一卷".into()))?;
+    let vb = fetch_vol(b)?
+        .ok_or_else(|| AppError::Msg("章节不存在，或两章不在同一卷".into()))?;
+    if va != vb {
+        return Err(AppError::Msg("两章不在同一卷，不能建立章间连线".into()));
+    }
+    Ok(va)
 }
 
 #[tauri::command]
@@ -242,13 +296,33 @@ pub fn set_chapter_group(
 ) -> Result<()> {
     state.with_project(|db| {
         if let Some(gid) = group_id {
-            let ok: i64 = db.conn.query_row(
-                "SELECT COUNT(*) FROM chapter_groups WHERE id = ?1",
-                params![gid],
+            // JOIN 校验小节与章节必须同卷（旧实现只验小节存在，跨卷也能加入——审查 P1-1）
+            let same: i64 = db.conn.query_row(
+                "SELECT COUNT(*) FROM chapter_groups g
+                 JOIN chapters c ON c.volume_id = g.volume_id AND c.deleted_at IS NULL
+                 WHERE g.id = ?1 AND c.id = ?2",
+                params![gid, chapter_id],
                 |r| r.get(0),
             )?;
-            if ok == 0 {
-                return Err(AppError::Msg("小节不存在".into()));
+            if same == 0 {
+                // 区分小节不存在 / 章节不存在 / 跨卷
+                let g: i64 = db.conn.query_row(
+                    "SELECT COUNT(*) FROM chapter_groups WHERE id = ?1",
+                    params![gid],
+                    |r| r.get(0),
+                )?;
+                let c: i64 = db.conn.query_row(
+                    "SELECT COUNT(*) FROM chapters WHERE id = ?1 AND deleted_at IS NULL",
+                    params![chapter_id],
+                    |r| r.get(0),
+                )?;
+                return Err(if g == 0 {
+                    AppError::Msg("小节不存在".into())
+                } else if c == 0 {
+                    AppError::Msg("章节不存在".into())
+                } else {
+                    AppError::Msg("章节与小节不属于同一卷，不能加入".into())
+                });
             }
         }
         let n = db.conn.execute(
@@ -401,4 +475,81 @@ pub fn set_group_edge_bend(state: State<'_, AppState>, edge_id: i64, bend: f64) 
         }
         Ok(())
     })
+}
+
+
+#[cfg(test)]
+mod constraint_tests {
+    use super::*;
+
+    /// 内存库：两卷，卷1有章1/2，卷2有章3
+    fn fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::migrations::apply(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO volumes (id,title) VALUES (1,'卷一');
+             INSERT INTO volumes (id,title) VALUES (2,'卷二');
+             INSERT INTO chapters (id,volume_id,title,sort_order) VALUES (1,1,'一',0);
+             INSERT INTO chapters (id,volume_id,title,sort_order) VALUES (2,1,'二',1);
+             INSERT INTO chapters (id,volume_id,title,sort_order) VALUES (3,2,'三',0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn same_volume_ok() {
+        let conn = fixture();
+        // 同卷两章：通过，返回卷 id
+        assert_eq!(validate_same_volume(&conn, 1, 2).unwrap(), 1);
+    }
+
+    #[test]
+    fn cross_volume_rejected() {
+        let conn = fixture();
+        // 章1（卷1）与章3（卷2）：旧实现 GROUP BY 读首行会误放行，现在必须拒绝
+        assert!(validate_same_volume(&conn, 1, 3).is_err());
+        assert!(validate_same_volume(&conn, 3, 2).is_err());
+    }
+
+    #[test]
+    fn missing_or_same_chapter_rejected() {
+        let conn = fixture();
+        assert!(validate_same_volume(&conn, 1, 999).is_err()); // 不存在
+        assert!(validate_same_volume(&conn, 1, 1).is_err()); // 同一章
+    }
+
+    #[test]
+    fn trigger_blocks_cross_volume_edge() {
+        let conn = fixture();
+        // 绕过 Rust 校验直接 INSERT 跨卷边，触发器必须拦截
+        assert!(conn
+            .execute(
+                "INSERT INTO chapter_edges (from_chapter,to_chapter,edge_type) VALUES (1,3,0)",
+                []
+            )
+            .is_err(), "跨卷章间连线必须被触发器拒绝");
+        // 同卷边允许
+        assert!(conn
+            .execute(
+                "INSERT INTO chapter_edges (from_chapter,to_chapter,edge_type) VALUES (1,2,0)",
+                []
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn trigger_blocks_cross_volume_group() {
+        let conn = fixture();
+        conn.execute("INSERT INTO chapter_groups (id,volume_id,title) VALUES (10,1,'小节A')", [])
+            .unwrap();
+        // 卷2 的章3 不能加入卷1 的小节
+        assert!(conn
+            .execute("UPDATE chapters SET group_id=10 WHERE id=3", [])
+            .is_err(), "跨卷加入小节必须被触发器拒绝");
+        // 同卷章1 可以
+        assert!(conn
+            .execute("UPDATE chapters SET group_id=10 WHERE id=1", [])
+            .is_ok());
+    }
 }

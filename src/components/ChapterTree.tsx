@@ -83,10 +83,10 @@ export function ChapterTree() {
     if (pendingImportPath) setShowImport(true);
   }, [pendingImportPath]);
 
-  const onChapterClick = (id: number) => {
+  const onChapterClick = async (id: number) => {
     if (id === selectedChapterId) return;
-    selectChapter(id);
-    void loadChapter(id);
+    const ok = await loadChapter(id);
+    if (ok) selectChapter(id);
   };
 
   // ---------- 创建 / 重命名 / 删除 ----------
@@ -118,8 +118,8 @@ export function ChapterTree() {
       const detail = await api.createChapter(volumeId, title.trim() || undefined);
       setPrompt(null);
       await refreshTree();
-      selectChapter(detail.id);
-      await loadChapter(detail.id);
+      const ok = await loadChapter(detail.id);
+      if (ok) selectChapter(detail.id);
     } catch (e) {
       showToast(String(e), 'error');
     }

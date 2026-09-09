@@ -14,6 +14,9 @@
  * - 滚轮缩放（以光标为中心）/ 空白拖拽平移
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDurableDraft } from '../hooks/useDurableDraft';
+import { useCanvasViewport } from '../hooks/useCanvasViewport';
+import { useRafCoalesce } from '../hooks/useRafCoalesce';
 import * as api from '../api';
 import { useAppStore } from '../store/appStore';
 import { useEditorStore } from '../store/editorStore';
@@ -53,6 +56,7 @@ import {
   IconSparkle,
   IconTrash,
 } from './icons';
+import { ShortcutHelp, STORYMAP_SHORTCUTS } from './CanvasChrome';
 
 /** 世界坐标系（画布逻辑尺寸）：落库归一化坐标 × 世界尺寸 = 世界像素 */
 const WORLD_W = 1600;
@@ -73,8 +77,6 @@ const NODE_TYPE_NAME: Record<number, string> = { 1: '支线卷', 2: '番外' };
 /** 弧线缺省调色板（story_arcs.color 为空时按 id 轮转） */
 const ARC_PALETTE = ['#5b8def', '#e2b93b', '#b56ad9', '#4fc47f', '#e2734f', '#3bc7d6'];
 const arcColor = (arc: StoryArc) => arc.color || ARC_PALETTE[arc.id % ARC_PALETTE.length];
-
-type View = { x: number; y: number; k: number };
 
 /** 未排布节点的缺省位置：按卷顺序蛇形网格（行距容纳加高后的卡面） */
 function defaultPos(order: number): { x: number; y: number } {
@@ -112,7 +114,6 @@ export function StoryMap() {
   /** 下钻中的卷（L2 卷内视图） */
   const [drilledVolumeId, setDrilledVolumeId] = useState<number | null>(null);
   const [positions, setPositions] = useState<Map<number, { x: number; y: number }>>(new Map());
-  const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
   /** 建连线弹窗 */
   const [pendingEdge, setPendingEdge] = useState<{ from: number; to: number } | null>(null);
@@ -137,7 +138,8 @@ export function StoryMap() {
   /** 全部人物关系（L1 只画跨卷关系） */
   const [relations, setRelations] = useState<CharacterRelation[]>([]);
   /** 人物层显隐开关 */
-  const [showCharacters, setShowCharacters] = useState(true);
+  // 人物轨迹默认折叠为独立图层，选中 / 聚焦某人物时才自动展开（审查 UX-2，降噪）
+  const [showCharacters, setShowCharacters] = useState(false);
   /** 人物视角：聚焦的人物 id（null = 全图） */
   const [focusChar, setFocusChar] = useState<number | null>(null);
   /** 已建卡人物（图谱节点来源之一：手动上图谱的人物可能无提及） */
@@ -157,8 +159,9 @@ export function StoryMap() {
   const [bends, setBends] = useState<Map<number, number>>(new Map());
 
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const viewRef = useRef(view);
-  viewRef.current = view;
+  // 视口（平移/缩放/世界坐标/fitBounds）收敛到共享 hook（审查 P2-2）
+  const { view, setView, viewRef, toWorld, fitBounds } =
+    useCanvasViewport(svgRef, drilledVolumeId);
   const positionsRef = useRef(positions);
   positionsRef.current = positions;
   /** 指针交互状态：pan / node / connect */
@@ -309,15 +312,8 @@ export function StoryMap() {
     const maxX = Math.max(...xs) + NODE_W + 40;
     const minY = Math.min(...ys) - 110;
     const maxY = Math.max(...ys) + NODE_H + 90;
-    const cw = svg.clientWidth;
-    const ch = svg.clientHeight;
-    const k = Math.min(cw / (maxX - minX), ch / (maxY - minY), 1.4);
-    setView({
-      k,
-      x: (cw - (maxX - minX) * k) / 2 - minX * k,
-      y: (ch - (maxY - minY) * k) / 2 - minY * k,
-    });
-  }, [graph]);
+    fitBounds(minX, minY, maxX, maxY, 1.4);
+  }, [graph, fitBounds]);
 
   const centerOn = useCallback((volumeId: number) => {
     const svg = svgRef.current;
@@ -331,6 +327,11 @@ export function StoryMap() {
     });
   }, []);
 
+  // 聚焦某人物时自动展开人物图层（默认折叠降噪，审查 UX-2）
+  useEffect(() => {
+    if (focusChar !== null) setShowCharacters(true);
+  }, [focusChar]);
+
   // 外部跳转定位（章节发展图 / 总览 → 地图；目标是卷节点）
   useEffect(() => {
     if (mapFocusNodeId === null) return;
@@ -338,29 +339,6 @@ export function StoryMap() {
     centerOn(mapFocusNodeId);
     clearMapFocus();
   }, [mapFocusNodeId, centerOn, clearMapFocus]);
-
-  // 滚轮缩放（以光标为中心）。
-  // 依赖 graph / drilledVolumeId：SVG 在数据加载后才渲染，空依赖会在
-  // 挂载瞬间拿到 null 引用导致监听器永远绑不上（缩放失灵的根因）；
-  // 下钻卷内视图时 SVG 卸载、返回时重挂载，也需要重绑
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = svg.getBoundingClientRect();
-      const cx = e.clientX - rect.left;
-      const cy = e.clientY - rect.top;
-      setView((v) => {
-        const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-        const k = Math.min(3, Math.max(0.2, v.k * factor));
-        const ratio = k / v.k;
-        return { k, x: cx - (cx - v.x) * ratio, y: cy - (cy - v.y) * ratio };
-      });
-    };
-    svg.addEventListener('wheel', onWheel, { passive: false });
-    return () => svg.removeEventListener('wheel', onWheel);
-  }, [graph, drilledVolumeId]);
 
   // Delete：删除选中卷节点（= 删除卷，显式确认）
   const deleteVolumeNode = useCallback(async (node: StoryNode) => {
@@ -394,16 +372,6 @@ export function StoryMap() {
   });
 
   // ---------- 指针交互 ----------
-
-  const toWorld = (clientX: number, clientY: number) => {
-    const svg = svgRef.current!;
-    const rect = svg.getBoundingClientRect();
-    const v = viewRef.current;
-    return {
-      x: (clientX - rect.left - v.x) / v.k,
-      y: (clientY - rect.top - v.y) / v.k,
-    };
-  };
 
   const onBackgroundDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -492,14 +460,14 @@ export function StoryMap() {
     svgRef.current?.setPointerCapture(e.pointerId);
   };
 
-  const onPointerMove = (e: React.PointerEvent) => {
+  const applyMove = (clientX: number, clientY: number) => {
     const d = dragRef.current;
     if (!d) return;
     if (d.kind === 'pan') {
-      setView((v) => ({ ...v, x: d.ox + (e.clientX - d.sx), y: d.oy + (e.clientY - d.sy) }));
+      setView((v) => ({ ...v, x: d.ox + (clientX - d.sx), y: d.oy + (clientY - d.sy) }));
     } else if (d.kind === 'node') {
       // 自由拖拽：无边界钳制，想到哪就到哪
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       d.moved = true;
       setPositions((prev) => {
         const next = new Map(prev);
@@ -507,10 +475,10 @@ export function StoryMap() {
         return next;
       });
     } else if (d.kind === 'connect') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       setConnecting((c) => (c ? { ...c, x: w.x, y: w.y } : c));
     } else if (d.kind === 'edge-bend') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       const delta = perpComponent(d.p0, d.p1, w) - d.startPerp;
       if (Math.abs(delta) > 4) d.moved = true;
       const bend = Math.max(-400, Math.min(400, d.startBend + delta));
@@ -520,7 +488,7 @@ export function StoryMap() {
         return next;
       });
     } else if (d.kind === 'char') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       d.moved = true;
       setCharManual((prev) => {
         const next = new Map(prev);
@@ -528,10 +496,16 @@ export function StoryMap() {
         return next;
       });
     } else if (d.kind === 'char-connect') {
-      const w = toWorld(e.clientX, e.clientY);
+      const w = toWorld(clientX, clientY);
       setCharConnecting((c) => (c ? { ...c, x: w.x, y: w.y } : c));
     }
   };
+
+  // pointermove 高频触发，用 rAF 合帧，每帧最多 setState 一次（审查 P2-1）
+  const scheduleMove = useRafCoalesce((pt: { x: number; y: number }) =>
+    applyMove(pt.x, pt.y),
+  );
+  const onPointerMove = (e: React.PointerEvent) => scheduleMove({ x: e.clientX, y: e.clientY });
 
   const onPointerUp = async (e: React.PointerEvent) => {
     // 释放指针捕获：否则 click/dblclick 的 target 会被重定向到 svg，
@@ -746,8 +720,9 @@ export function StoryMap() {
 
   const openChapterInEditor = async (chapterId: number) => {
     const { selectChapter } = useAppStore.getState();
+    const ok = await useEditorStore.getState().loadChapter(chapterId);
+    if (!ok) return;
     selectChapter(chapterId);
-    await useEditorStore.getState().loadChapter(chapterId);
     setViewMode('editor');
   };
 
@@ -1045,10 +1020,14 @@ export function StoryMap() {
           <span className="lg lg-flashback">闪回</span>
         </div>
         <div className="story-map-toolbar-right">
+          <span className="canvas-axis-hint" data-tip="横轴＝故事时间/章节顺序，纵轴＝剧情线泳道">
+            横轴时间 · 纵轴剧情线
+          </span>
           <button className="btn btn-mini" data-tip="适应视图" onClick={() => fitView()}>
             <IconFitView />
           </button>
           <span className="story-map-zoom">{Math.round(view.k * 100)}%</span>
+          <ShortcutHelp shortcuts={STORYMAP_SHORTCUTS} title="全书故事图谱 · 操作" />
         </div>
       </div>
 
@@ -1694,29 +1673,16 @@ function VolumeDrawer({
   onEnterVolume: () => void;
   onDelete: () => void;
 }) {
-  const showToast = useAppStore((s) => s.showToast);
-  const [summary, setSummary] = useState(node.summary);
-  const timerRef = useRef<number | null>(null);
-  const latestRef = useRef(summary);
-
-  // 防抖保存：输入停顿 600ms 后落库
-  useEffect(() => {
-    latestRef.current = summary;
-    if (summary === node.summary) return;
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(async () => {
-      try {
-        await api.setVolumeSummary(node.id, latestRef.current);
-        window.dispatchEvent(new Event('nf:story-updated'));
-      } catch (e) {
-        showToast(String(e), 'error');
-      }
-    }, SUMMARY_DEBOUNCE_MS);
-    return () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [summary]);
+  const { draft: sDraft, setDraft: setSDraft, error: sError } = useDurableDraft<{ summary: string }>(
+    node.id,
+    { summary: node.summary },
+    async (id, d) => {
+      await api.setVolumeSummary(id, d.summary);
+      window.dispatchEvent(new Event('nf:story-updated'));
+    },
+    SUMMARY_DEBOUNCE_MS,
+  );
+  const summary = sDraft.summary;
 
   const donePct = node.chapterCount > 0 ? Math.round((node.doneChapters / node.chapterCount) * 100) : 0;
 
@@ -1748,8 +1714,9 @@ function VolumeDrawer({
         value={summary}
         rows={7}
         placeholder="这一卷写什么？主角目标、核心冲突、结尾钩子……"
-        onChange={(e) => setSummary(e.target.value)}
+        onChange={(e) => setSDraft({ summary: e.target.value })}
       />
+      {sError && <div className="draft-error-line">卷细纲保存失败：{sError}</div>}
       <div className="drawer-actions">
         <button className="btn btn-primary btn-mini" onClick={onEnterVolume}>
           进入卷内
