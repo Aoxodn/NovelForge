@@ -30,14 +30,33 @@ interface AppStore {
   writerSettings: WriterSettings;
   /** 专注模式：隐藏目录 / 信息两栏，正文居中限宽（会话级偏好，不持久化） */
   focusMode: boolean;
-  /** 主区视图：editor=三栏写作 map=故事地图 overview=全书总览 characters=角色卡（三栏保持挂载） */
-  viewMode: 'editor' | 'map' | 'overview' | 'characters';
+  /** 主区视图：editor=三栏写作 map=故事地图 overview=全书总览 characters=角色卡
+   *  timeline=故事时间轴 board=进度看板 lore=设定词条 foreshadow=伏笔台账
+   *  pov=POV仪表盘 address=称谓一致性 style=文风结构 */
+  viewMode:
+    | 'editor'
+    | 'map'
+    | 'overview'
+    | 'characters'
+    | 'timeline'
+    | 'board'
+    | 'lore'
+    | 'foreshadow'
+    | 'pov'
+    | 'address'
+    | 'style';
   /** 请求角色卡视图定位高亮某角色（图谱节点跳转用，消费后自清） */
   charFocusId: number | null;
   /** 请求故事地图定位高亮某卷节点（InfoPanel / 总览跳转用，消费后自清） */
   mapFocusNodeId: number | null;
-  /** 全局写作工具弹窗（审查新增功能）：连续性检查 / 修订工作台 / 场景板 */
-  toolModal: 'none' | 'continuity' | 'revision' | 'scenes';
+  /** 全局写作工具弹窗（审查新增功能）：连续性检查 / 修订工作台 / 场景板 /
+   *  人物状态账本 / 龙套铸造 */
+  toolModal: 'none' | 'continuity' | 'revision' | 'scenes' | 'state' | 'forge';
+  /** 全局剧情线过滤（0 = 全部） */
+  activeArcId: number;
+  /** 编辑器分屏：左栏对照大纲/场景/伏笔 */
+  splitMode: boolean;
+  splitPane: 'outline' | 'scenes' | 'foreshadow';
   /** 今日累计码字（打开项目时拉取，保存后由后端权威值刷新） */
   todayWords: number;
   toast: { text: string; kind: 'info' | 'error' } | null;
@@ -54,9 +73,12 @@ interface AppStore {
   closeProject: () => Promise<void>;
   refreshTree: () => Promise<void>;
   selectChapter: (id: number | null) => void;
-  setViewMode: (m: 'editor' | 'map' | 'overview' | 'characters') => void;
+  setViewMode: (m: AppStore['viewMode']) => void;
   /** 打开 / 关闭全局写作工具弹窗 */
-  setToolModal: (m: 'none' | 'continuity' | 'revision' | 'scenes') => void;
+  setToolModal: (m: AppStore['toolModal']) => void;
+  setActiveArcId: (id: number) => void;
+  toggleSplitMode: () => void;
+  setSplitPane: (p: 'outline' | 'scenes' | 'foreshadow') => void;
   /** 切到角色卡并定位高亮某角色 */
   focusCharacter: (characterId: number) => void;
   clearCharFocus: () => void;
@@ -154,6 +176,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   todayWords: 0,
   toast: null,
   pendingImportPath: null,
+  activeArcId: 0,
+  splitMode: false,
+  splitPane: 'outline',
 
   createProject: async (opts) => {
     try {
@@ -197,7 +222,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       treeRefreshTimer = null;
     }
     await api.closeProject();
-    set({ tree: null, selectedChapterId: null, todayWords: 0, viewMode: 'editor', mapFocusNodeId: null, charFocusId: null, toolModal: 'none' });
+    set({ tree: null, selectedChapterId: null, todayWords: 0, viewMode: 'editor', mapFocusNodeId: null, charFocusId: null, toolModal: 'none', activeArcId: 0, splitMode: false });
   },
 
   refreshTree: async () => {
@@ -210,6 +235,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   setViewMode: (m) => set({ viewMode: m }),
   setToolModal: (m) => set({ toolModal: m }),
+  setActiveArcId: (id) => set({ activeArcId: id }),
+  toggleSplitMode: () => set((s) => ({ splitMode: !s.splitMode })),
+  setSplitPane: (p) => set({ splitPane: p, splitMode: true }),
 
   focusMapNode: (volumeId) =>
     set({ viewMode: 'map', mapFocusNodeId: volumeId }),

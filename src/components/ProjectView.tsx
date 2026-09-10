@@ -28,6 +28,18 @@ import { SaveFailureDialog } from "./SaveFailureDialog";
 import { ContinuityModal } from "./tools/ContinuityModal";
 import { RevisionModal } from "./tools/RevisionModal";
 import { SceneBoardModal } from "./tools/SceneBoardModal";
+import {
+  AddressConsistency,
+  BatchForgeModal,
+  ForeshadowLedger,
+  LoreLibrary,
+  PovDashboardView,
+  ProgressBoard,
+  StateLedgerModal,
+  StoryTimelineView,
+  StyleAndStructure,
+} from "./tools/RoadmapTools";
+import { SplitOutlinePane } from "./SplitOutlinePane";
 import "../styles/workspace.css";
 
 /** 自动备份周期（文档：每 30 分钟） */
@@ -59,6 +71,7 @@ export function ProjectView() {
   const toolModal = useAppStore((s) => s.toolModal);
   const setToolModal = useAppStore((s) => s.setToolModal);
   const selectedChapterId = useAppStore((s) => s.selectedChapterId);
+  const splitMode = useAppStore((s) => s.splitMode);
   const currentChapterTitle = useAppStore((s) => {
     const hit = s.tree?.chapters.find((c) => c.id === s.selectedChapterId);
     return hit?.title ?? "";
@@ -149,6 +162,9 @@ export function ProjectView() {
       ) {
         e.preventDefault();
         useAppStore.getState().toggleFocusMode();
+      } else if (e.ctrlKey && e.key === "\\") {
+        e.preventDefault();
+        useAppStore.getState().toggleSplitMode();
       } else if (e.key === "Escape") {
         // 模态层拥有 Esc 的最高优先级（Modal 自己负责关闭）；不要同时切视图/退出专注。
         if (document.querySelector(".modal-mask")) return;
@@ -214,6 +230,9 @@ export function ProjectView() {
       <div
         className={`main-columns${focusMode ? " focus" : ""}${viewMode !== "editor" ? " view-switched" : ""}`}
       >
+        {splitMode && viewMode === "editor" && !focusMode && (
+          <SplitOutlinePane />
+        )}
         <ChapterTree />
         <ChapterEditor />
         <InfoPanel />
@@ -221,7 +240,7 @@ export function ProjectView() {
           <SettingsPanel onClose={() => setShowSettings(false)} />
         )}
       </div>
-      {/* 故事地图 / 全书总览：与三栏并列的独立视图（同源 story graph） */}
+      {/* 故事地图 / 全书总览 / 路线图视图 */}
       {viewMode === "map" && (
         <div className="story-view">
           <StoryMap />
@@ -235,6 +254,41 @@ export function ProjectView() {
       {viewMode === "characters" && (
         <div className="story-view">
           <CharacterCardView />
+        </div>
+      )}
+      {viewMode === "timeline" && (
+        <div className="story-view">
+          <StoryTimelineView />
+        </div>
+      )}
+      {viewMode === "board" && (
+        <div className="story-view">
+          <ProgressBoard />
+        </div>
+      )}
+      {viewMode === "lore" && (
+        <div className="story-view">
+          <LoreLibrary />
+        </div>
+      )}
+      {viewMode === "foreshadow" && (
+        <div className="story-view">
+          <ForeshadowLedger />
+        </div>
+      )}
+      {viewMode === "pov" && (
+        <div className="story-view">
+          <PovDashboardView />
+        </div>
+      )}
+      {viewMode === "address" && (
+        <div className="story-view">
+          <AddressConsistency />
+        </div>
+      )}
+      {viewMode === "style" && (
+        <div className="story-view">
+          <StyleAndStructure />
         </div>
       )}
       <StatusBar />
@@ -256,6 +310,12 @@ export function ProjectView() {
           chapterTitle={currentChapterTitle}
           onClose={() => setToolModal("none")}
         />
+      )}
+      {toolModal === "state" && (
+        <StateLedgerModal onClose={() => setToolModal("none")} />
+      )}
+      {toolModal === "forge" && (
+        <BatchForgeModal onClose={() => setToolModal("none")} />
       )}
       {saveBlock && (
         <SaveFailureDialog

@@ -20,6 +20,7 @@ import { WindowControls } from "./WindowControls";
 import { fmt } from "../utils/text";
 import * as api from "../api";
 import type { Theme } from "../types/models";
+import "../styles/roadmap.css";
 
 const THEME_ORDER: Theme[] = ["dark", "light", "sepia"];
 const THEME_LABEL: Record<Theme, string> = {
@@ -60,7 +61,21 @@ export function TopBar({
   const refreshTree = useAppStore((s) => s.refreshTree);
   const showToast = useAppStore((s) => s.showToast);
   const selectedChapterId = useAppStore((s) => s.selectedChapterId);
+  const activeArcId = useAppStore((s) => s.activeArcId);
+  const setActiveArcId = useAppStore((s) => s.setActiveArcId);
+  const splitMode = useAppStore((s) => s.splitMode);
+  const toggleSplitMode = useAppStore((s) => s.toggleSplitMode);
   const totalWords = useCountUp(tree.stats.totalWordCount);
+  const [arcs, setArcs] = useState<{ id: number; title: string }[]>([]);
+
+  useEffect(() => {
+    void api
+      .listStoryArcs()
+      .then((list) =>
+        setArcs(list.map((a) => ({ id: a.id, title: a.title }))),
+      )
+      .catch(() => setArcs([]));
+  }, [tree.projectPath]);
   const [moreOpen, setMoreOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -163,6 +178,11 @@ export function TopBar({
       label: "角色",
       icon: <IconUsers size={14} />,
     },
+    { mode: "timeline" as const, label: "时间轴", icon: null },
+    { mode: "board" as const, label: "看板", icon: null },
+    { mode: "foreshadow" as const, label: "伏笔", icon: null },
+    { mode: "lore" as const, label: "设定", icon: null },
+    { mode: "pov" as const, label: "POV", icon: null },
   ];
 
   return (
@@ -228,6 +248,33 @@ export function TopBar({
           </button>
         ))}
       </nav>
+
+      <div className="topbar-center-tools">
+        {arcs.length > 0 ? (
+          <select
+            className="arc-filter"
+            value={activeArcId}
+            onChange={(e) => setActiveArcId(Number(e.target.value))}
+            title="全局剧情线过滤"
+            aria-label="全局剧情线过滤"
+          >
+            <option value={0}>全部剧情线</option>
+            {arcs.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.title}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <button
+          className={`icon-btn${splitMode ? " active" : ""}`}
+          data-tip={splitMode ? "关闭分屏 (Ctrl+\\)" : "大纲分屏 (Ctrl+\\)"}
+          aria-label="大纲分屏"
+          onClick={toggleSplitMode}
+        >
+          <span aria-hidden="true">◫</span>
+        </button>
+      </div>
 
       <div className="topbar-right">
         <button
@@ -306,6 +353,34 @@ export function TopBar({
               >
                 <IconSearch />
                 修订工作台
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => run(() => setToolModal("state"))}
+              >
+                <IconUsers />
+                人物状态账本
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => run(() => setToolModal("forge"))}
+              >
+                <IconDice />
+                龙套批量铸造
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => run(() => setViewMode("address"))}
+              >
+                <IconShield />
+                称谓一致性
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => run(() => setViewMode("style"))}
+              >
+                <IconChart />
+                文风与结构快照
               </button>
               <span className="toolbar-menu-sep" />
               <div className="toolbar-menu-label">项目</div>

@@ -612,3 +612,205 @@ pub struct CharacterCanvasPos {
     pub map_y: f64,
 }
 
+// ========== 路线图 P0–P2（V19） ==========
+
+/// 一等伏笔台账行
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeshadowItem {
+    pub id: i64,
+    pub title: String,
+    /// 0悬念 1信物 2谎言 3预言 4其他
+    pub foreshadow_type: i32,
+    pub plant_chapter_id: Option<i64>,
+    pub plant_chapter_title: Option<String>,
+    pub expect_chapter_id: Option<i64>,
+    pub expect_chapter_title: Option<String>,
+    pub resolve_chapter_id: Option<i64>,
+    pub resolve_chapter_title: Option<String>,
+    /// 0活跃 1已回收 2失效
+    pub status: i32,
+    pub arc_id: Option<i64>,
+    pub arc_title: Option<String>,
+    pub character_id: Option<i64>,
+    pub character_name: Option<String>,
+    pub note: String,
+    /// 跨度（埋设→回收章序差；无锚点为 -1）
+    pub span: i64,
+    pub overdue: bool,
+}
+
+/// 时间轴节点（章）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineNode {
+    pub id: i64,
+    pub volume_id: i64,
+    pub volume_title: String,
+    pub title: String,
+    pub story_time: String,
+    pub story_order: f64,
+    pub sort_order: i64,
+    pub global_order: i64,
+    pub timeline_group: String,
+    pub status: i32,
+    pub word_count: i64,
+    pub tension: Option<i64>,
+    pub pov_character_id: Option<i64>,
+    pub pov_name: Option<String>,
+    pub arc_ids: Vec<i64>,
+}
+
+/// 看板章节卡
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardCard {
+    pub id: i64,
+    pub volume_id: i64,
+    pub volume_title: String,
+    pub title: String,
+    pub board_lane: i64,
+    pub status: i64,
+    pub word_count: i64,
+    pub target_words: i64,
+    pub summary: String,
+    pub arc_ids: Vec<i64>,
+    pub foreshadow_count: i64,
+    pub tension: Option<i64>,
+}
+
+/// 人物状态快照
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterStateSnapshot {
+    pub id: i64,
+    pub character_id: i64,
+    pub character_name: String,
+    pub chapter_id: Option<i64>,
+    pub chapter_title: Option<String>,
+    pub chapter_order: Option<i64>,
+    pub location: String,
+    pub alive: Option<i64>,
+    pub affiliation: String,
+    pub knows: Vec<String>,
+    pub note: String,
+}
+
+/// 设定词条
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreEntry {
+    pub id: i64,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    pub aliases: Vec<String>,
+    pub tags: Vec<String>,
+    pub chapter_count: i64,
+}
+
+/// 称谓漂移命中
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressDriftHit {
+    pub character_id: i64,
+    pub character_name: String,
+    pub form: String,
+    pub preferred: String,
+    pub chapter_id: i64,
+    pub chapter_title: String,
+    pub count: i64,
+    pub snippet: String,
+}
+
+/// 称谓规范
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressForm {
+    pub id: i64,
+    pub from_char: Option<i64>,
+    pub from_name: Option<String>,
+    pub to_char: Option<i64>,
+    pub to_name: Option<String>,
+    pub form: String,
+    pub preferred: bool,
+    pub note: String,
+}
+
+/// POV 分布摘要
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PovStat {
+    pub character_id: i64,
+    pub name: String,
+    pub chapter_count: i64,
+    pub longest_streak: i64,
+    pub last_chapter_order: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PovDashboard {
+    /// 按全书章序的 POV 名（空串 = 未指定）
+    pub per_chapter: Vec<String>,
+    pub chapter_ids: Vec<i64>,
+    pub stats: Vec<PovStat>,
+    pub max_run_len: i64,
+    pub max_run_name: String,
+}
+
+/// 文风指纹
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleFingerprint {
+    pub total_words: i64,
+    pub dialogue_ratio: f64,
+    pub avg_paragraph_len: f64,
+    pub avg_sentence_len: f64,
+    pub long_sentence_ratio: f64,
+    pub top_adverbs: Vec<(String, i64)>,
+    pub top_particles: Vec<(String, i64)>,
+}
+
+/// 结构快照元数据
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructureSnapshotMeta {
+    pub id: i64,
+    pub label: String,
+    pub created_at: String,
+    pub volume_count: i64,
+    pub chapter_count: i64,
+    pub foreshadow_count: i64,
+}
+
+/// 批量铸造结果
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchCharacterResult {
+    pub created: i64,
+    pub ids: Vec<i64>,
+}
+
+/// 章元数据扩展（看板/过滤/时间轴共用查询结果）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterRoadmapMeta {
+    pub id: i64,
+    pub volume_id: i64,
+    pub title: String,
+    pub word_count: i64,
+    pub target_words: i64,
+    pub board_lane: i64,
+    pub status: i64,
+    pub summary: String,
+    pub story_time: String,
+    pub story_order: Option<f64>,
+    pub timeline_group: String,
+    pub tension: Option<i64>,
+    pub pov_character_id: Option<i64>,
+    pub pov_name: Option<String>,
+    pub arc_ids: Vec<i64>,
+    pub foreshadow_count: i64,
+}
+

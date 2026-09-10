@@ -596,6 +596,103 @@ const MIGRATIONS: &[(i64, &str)] = &[(
     ALTER TABLE characters ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS idx_characters_sort ON characters(sort_order);
     ",
+    ),
+    // V19（路线图 P0–P2）：伏笔台账 / 剧情线成员 / 故事时间轴 / 人物状态账本 /
+    // 设定词条库 / 称谓表 / 章看板字段 / 结构快照。
+    (
+        19,
+        "
+    CREATE TABLE IF NOT EXISTS foreshadows (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        title              TEXT NOT NULL,
+        foreshadow_type    INTEGER NOT NULL DEFAULT 0, -- 0悬念 1信物 2谎言 3预言 4其他
+        plant_chapter_id   INTEGER REFERENCES chapters(id) ON DELETE SET NULL,
+        expect_chapter_id  INTEGER REFERENCES chapters(id) ON DELETE SET NULL,
+        resolve_chapter_id INTEGER REFERENCES chapters(id) ON DELETE SET NULL,
+        status             INTEGER NOT NULL DEFAULT 0, -- 0活跃 1已回收 2失效
+        arc_id             INTEGER REFERENCES story_arcs(id) ON DELETE SET NULL,
+        character_id       INTEGER REFERENCES characters(id) ON DELETE SET NULL,
+        note               TEXT NOT NULL DEFAULT '',
+        created_at         TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at         TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_fs_status ON foreshadows(status);
+    CREATE INDEX IF NOT EXISTS idx_fs_arc    ON foreshadows(arc_id);
+    CREATE INDEX IF NOT EXISTS idx_fs_plant  ON foreshadows(plant_chapter_id);
+
+    CREATE TABLE IF NOT EXISTS chapter_arc_members (
+        chapter_id INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        arc_id     INTEGER NOT NULL REFERENCES story_arcs(id) ON DELETE CASCADE,
+        is_primary INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (chapter_id, arc_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cams_arc ON chapter_arc_members(arc_id);
+
+    ALTER TABLE chapters ADD COLUMN story_time TEXT NOT NULL DEFAULT '';
+    ALTER TABLE chapters ADD COLUMN story_order REAL;
+    ALTER TABLE chapters ADD COLUMN timeline_group TEXT NOT NULL DEFAULT 'main';
+    ALTER TABLE chapters ADD COLUMN pov_character_id INTEGER REFERENCES characters(id) ON DELETE SET NULL;
+    ALTER TABLE chapters ADD COLUMN target_words INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE chapters ADD COLUMN tension INTEGER;
+    ALTER TABLE chapters ADD COLUMN board_lane INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS idx_chapters_story_order ON chapters(story_order);
+    CREATE INDEX IF NOT EXISTS idx_chapters_pov ON chapters(pov_character_id);
+    CREATE INDEX IF NOT EXISTS idx_chapters_lane ON chapters(board_lane);
+
+    ALTER TABLE scenes ADD COLUMN story_time TEXT NOT NULL DEFAULT '';
+
+    CREATE TABLE IF NOT EXISTS character_state_snapshots (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        chapter_id   INTEGER REFERENCES chapters(id) ON DELETE SET NULL,
+        location     TEXT NOT NULL DEFAULT '',
+        alive        INTEGER, -- NULL未知 0死亡 1存活
+        affiliation  TEXT NOT NULL DEFAULT '',
+        knows        TEXT NOT NULL DEFAULT '[]',
+        note         TEXT NOT NULL DEFAULT '',
+        created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cstate_char ON character_state_snapshots(character_id, chapter_id);
+
+    CREATE TABLE IF NOT EXISTS lore_entries (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind       TEXT NOT NULL DEFAULT 'concept',
+        title      TEXT NOT NULL UNIQUE,
+        body       TEXT NOT NULL DEFAULT '',
+        aliases    TEXT NOT NULL DEFAULT '[]',
+        tags       TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+
+    CREATE TABLE IF NOT EXISTS lore_chapter_links (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id   INTEGER NOT NULL REFERENCES lore_entries(id) ON DELETE CASCADE,
+        chapter_id INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        UNIQUE(entry_id, chapter_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lorelink_ch ON lore_chapter_links(chapter_id);
+
+    CREATE TABLE IF NOT EXISTS address_forms (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_char  INTEGER REFERENCES characters(id) ON DELETE CASCADE,
+        to_char    INTEGER REFERENCES characters(id) ON DELETE CASCADE,
+        form       TEXT NOT NULL,
+        preferred  INTEGER NOT NULL DEFAULT 1,
+        note       TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_addr_from ON address_forms(from_char);
+    CREATE INDEX IF NOT EXISTS idx_addr_to   ON address_forms(to_char);
+
+    CREATE TABLE IF NOT EXISTS structure_snapshots (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        label      TEXT NOT NULL DEFAULT '',
+        payload    TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    ",
     )
 ];
 

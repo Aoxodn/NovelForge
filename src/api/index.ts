@@ -38,6 +38,23 @@ import type {
   CharacterBinding,
   CharacterCanvasPos,
 } from '../types/models';
+import type {
+  AddressDriftHit,
+  AddressForm,
+  BatchCharacterItem,
+  BatchCharacterResult,
+  BoardCard,
+  ChapterRoadmapMeta,
+  CharacterStateSnapshot,
+  ForeshadowItem,
+  ForeshadowPatch,
+  LoreEntry,
+  PovDashboard,
+  StoryTimePatch,
+  StructureSnapshotMeta,
+  StyleFingerprint,
+  TimelineNode,
+} from '../types/models';
 
 // ---------- 项目 ----------
 
@@ -743,3 +760,183 @@ export const applyCrossReplace = (
   chapterIds: number[] | null,
 ) =>
   cmd<number>('apply_cross_replace', { find, replace, chapterIds });
+
+// ========== 路线图 P0–P2 ==========
+
+export const listForeshadowLedger = () =>
+  cmd<ForeshadowItem[]>('list_foreshadow_ledger');
+
+export const createForeshadow = (opts: {
+  title: string;
+  foreshadowType?: number;
+  plantChapterId?: number | null;
+  expectChapterId?: number | null;
+  arcId?: number | null;
+  characterId?: number | null;
+  note?: string;
+}) =>
+  cmd<ForeshadowItem>('create_foreshadow', {
+    title: opts.title,
+    foreshadowType: opts.foreshadowType ?? null,
+    plantChapterId: opts.plantChapterId ?? null,
+    expectChapterId: opts.expectChapterId ?? null,
+    arcId: opts.arcId ?? null,
+    characterId: opts.characterId ?? null,
+    note: opts.note ?? null,
+  });
+
+export const updateForeshadow = (id: number, patch: ForeshadowPatch) =>
+  cmd<ForeshadowItem>('update_foreshadow', { id, patch });
+
+export const deleteForeshadow = (id: number) =>
+  cmd<void>('delete_foreshadow', { id });
+
+export const foreshadowsForChapter = (chapterId: number) =>
+  cmd<ForeshadowItem[]>('foreshadows_for_chapter', { chapterId });
+
+export const getChapterArcs = (chapterId: number) =>
+  cmd<number[]>('get_chapter_arcs', { chapterId });
+
+export const setChapterArcs = (
+  chapterId: number,
+  arcIds: number[],
+  primaryArcId?: number | null,
+) =>
+  cmd<void>('set_chapter_arcs', {
+    chapterId,
+    arcIds,
+    primaryArcId: primaryArcId ?? null,
+  });
+
+export const listRoadmapChapters = (activeArcId?: number | null) =>
+  cmd<ChapterRoadmapMeta[]>('list_roadmap_chapters', {
+    activeArcId: activeArcId ?? null,
+  });
+
+export const getStoryTimeline = (activeArcId?: number | null) =>
+  cmd<TimelineNode[]>('get_story_timeline', {
+    activeArcId: activeArcId ?? null,
+  });
+
+export const updateChapterRoadmap = (chapterId: number, patch: StoryTimePatch) =>
+  cmd<void>('update_chapter_roadmap', { chapterId, patch });
+
+export const getBoard = (activeArcId?: number | null) =>
+  cmd<BoardCard[]>('get_board', { activeArcId: activeArcId ?? null });
+
+export const listStateSnapshots = (characterId?: number | null) =>
+  cmd<CharacterStateSnapshot[]>('list_state_snapshots', {
+    characterId: characterId ?? null,
+  });
+
+export const upsertStateSnapshot = (opts: {
+  characterId: number;
+  chapterId?: number | null;
+  location?: string;
+  alive?: number | null;
+  affiliation?: string;
+  knows?: string[];
+  note?: string;
+}) =>
+  cmd<CharacterStateSnapshot>('upsert_state_snapshot', {
+    characterId: opts.characterId,
+    chapterId: opts.chapterId ?? null,
+    location: opts.location ?? null,
+    alive: opts.alive ?? null,
+    affiliation: opts.affiliation ?? null,
+    knows: opts.knows ?? null,
+    note: opts.note ?? null,
+  });
+
+export const deleteStateSnapshot = (id: number) =>
+  cmd<void>('delete_state_snapshot', { id });
+
+export const getPovDashboard = (activeArcId?: number | null) =>
+  cmd<PovDashboard>('get_pov_dashboard', {
+    activeArcId: activeArcId ?? null,
+  });
+
+export const listLoreEntries = () => cmd<LoreEntry[]>('list_lore_entries');
+export const createLoreEntry = (opts: {
+  title: string;
+  kind?: string;
+  body?: string;
+  aliases?: string[];
+  tags?: string[];
+}) =>
+  cmd<LoreEntry>('create_lore_entry', {
+    title: opts.title,
+    kind: opts.kind ?? null,
+    body: opts.body ?? null,
+    aliases: opts.aliases ?? null,
+    tags: opts.tags ?? null,
+  });
+export const updateLoreEntry = (
+  id: number,
+  opts: {
+    title?: string;
+    kind?: string;
+    body?: string;
+    aliases?: string[];
+    tags?: string[];
+  },
+) =>
+  cmd<LoreEntry>('update_lore_entry', {
+    id,
+    title: opts.title ?? null,
+    kind: opts.kind ?? null,
+    body: opts.body ?? null,
+    aliases: opts.aliases ?? null,
+    tags: opts.tags ?? null,
+  });
+export const deleteLoreEntry = (id: number) =>
+  cmd<void>('delete_lore_entry', { id });
+export const linkLoreToChapter = (entryId: number, chapterId: number) =>
+  cmd<void>('link_lore_to_chapter', { entryId, chapterId });
+export const unlinkLoreFromChapter = (entryId: number, chapterId: number) =>
+  cmd<void>('unlink_lore_from_chapter', { entryId, chapterId });
+export const loreForChapter = (chapterId: number) =>
+  cmd<LoreEntry[]>('lore_for_chapter', { chapterId });
+
+export const listAddressForms = () => cmd<AddressForm[]>('list_address_forms');
+export const upsertAddressForm = (opts: {
+  fromChar?: number | null;
+  toChar?: number | null;
+  form: string;
+  preferred: boolean;
+  note?: string;
+}) =>
+  cmd<AddressForm[]>('upsert_address_form', {
+    fromChar: opts.fromChar ?? null,
+    toChar: opts.toChar ?? null,
+    form: opts.form,
+    preferred: opts.preferred,
+    note: opts.note ?? null,
+  });
+export const deleteAddressForm = (id: number) =>
+  cmd<void>('delete_address_form', { id });
+export const scanAddressDrift = () =>
+  cmd<AddressDriftHit[]>('scan_address_drift');
+
+export const batchCreateCharacters = (items: BatchCharacterItem[]) =>
+  cmd<BatchCharacterResult>('batch_create_characters', { items });
+
+export const getStyleFingerprint = (chapterId?: number | null) =>
+  cmd<StyleFingerprint>('get_style_fingerprint', {
+    chapterId: chapterId ?? null,
+  });
+
+export const createStructureSnapshot = (label?: string) =>
+  cmd<StructureSnapshotMeta>('create_structure_snapshot', {
+    label: label ?? null,
+  });
+export const listStructureSnapshots = () =>
+  cmd<StructureSnapshotMeta[]>('list_structure_snapshots');
+export const getStructureSnapshot = (id: number) =>
+  cmd<Record<string, unknown>>('get_structure_snapshot', { id });
+export const deleteStructureSnapshot = (id: number) =>
+  cmd<void>('delete_structure_snapshot', { id });
+
+export const setTensionPoints = (
+  points: { chapterId: number; tension: number }[],
+) => cmd<void>('set_tension_points', { points });

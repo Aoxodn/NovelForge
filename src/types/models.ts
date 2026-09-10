@@ -579,3 +579,193 @@ export interface LevelFrame {
   selectedId: number | null;
   layoutStrategy: string;
 }
+
+// ========== 路线图 P0–P2 ==========
+
+export interface ForeshadowItem {
+  id: number;
+  title: string;
+  foreshadowType: number;
+  plantChapterId: number | null;
+  plantChapterTitle: string | null;
+  expectChapterId: number | null;
+  expectChapterTitle: string | null;
+  resolveChapterId: number | null;
+  resolveChapterTitle: string | null;
+  status: number;
+  arcId: number | null;
+  arcTitle: string | null;
+  characterId: number | null;
+  characterName: string | null;
+  note: string;
+  span: number;
+  overdue: boolean;
+}
+
+export interface ForeshadowPatch {
+  title?: string;
+  foreshadowType?: number;
+  plantChapterId?: number | null;
+  expectChapterId?: number | null;
+  resolveChapterId?: number | null;
+  status?: number;
+  arcId?: number | null;
+  characterId?: number | null;
+  note?: string;
+}
+
+export interface ChapterRoadmapMeta {
+  id: number;
+  volumeId: number;
+  title: string;
+  wordCount: number;
+  targetWords: number;
+  boardLane: number;
+  status: number;
+  summary: string;
+  storyTime: string;
+  storyOrder: number | null;
+  timelineGroup: string;
+  tension: number | null;
+  povCharacterId: number | null;
+  povName: string | null;
+  arcIds: number[];
+  foreshadowCount: number;
+}
+
+export interface TimelineNode {
+  id: number;
+  volumeId: number;
+  volumeTitle: string;
+  title: string;
+  storyTime: string;
+  storyOrder: number;
+  sortOrder: number;
+  globalOrder: number;
+  timelineGroup: string;
+  status: number;
+  wordCount: number;
+  tension: number | null;
+  povCharacterId: number | null;
+  povName: string | null;
+  arcIds: number[];
+}
+
+export interface BoardCard {
+  id: number;
+  volumeId: number;
+  volumeTitle: string;
+  title: string;
+  boardLane: number;
+  status: number;
+  wordCount: number;
+  targetWords: number;
+  summary: string;
+  arcIds: number[];
+  foreshadowCount: number;
+  tension: number | null;
+}
+
+export interface CharacterStateSnapshot {
+  id: number;
+  characterId: number;
+  characterName: string;
+  chapterId: number | null;
+  chapterTitle: string | null;
+  chapterOrder: number | null;
+  location: string;
+  alive: number | null;
+  affiliation: string;
+  knows: string[];
+  note: string;
+}
+
+export interface LoreEntry {
+  id: number;
+  kind: string;
+  title: string;
+  body: string;
+  aliases: string[];
+  tags: string[];
+  chapterCount: number;
+}
+
+export interface AddressForm {
+  id: number;
+  fromChar: number | null;
+  fromName: string | null;
+  toChar: number | null;
+  toName: string | null;
+  form: string;
+  preferred: boolean;
+  note: string;
+}
+
+export interface AddressDriftHit {
+  characterId: number;
+  characterName: string;
+  form: string;
+  preferred: string;
+  chapterId: number;
+  chapterTitle: string;
+  count: number;
+  snippet: string;
+}
+
+export interface PovStat {
+  characterId: number;
+  name: string;
+  chapterCount: number;
+  longestStreak: number;
+  lastChapterOrder: number | null;
+}
+
+export interface PovDashboard {
+  perChapter: string[];
+  chapterIds: number[];
+  stats: PovStat[];
+  maxRunLen: number;
+  maxRunName: string;
+}
+
+export interface StyleFingerprint {
+  totalWords: number;
+  dialogueRatio: number;
+  avgParagraphLen: number;
+  avgSentenceLen: number;
+  longSentenceRatio: number;
+  topAdverbs: [string, number][];
+  topParticles: [string, number][];
+}
+
+export interface StructureSnapshotMeta {
+  id: number;
+  label: string;
+  createdAt: string;
+  volumeCount: number;
+  chapterCount: number;
+  foreshadowCount: number;
+}
+
+export interface BatchCharacterItem {
+  name: string;
+  role?: string;
+  faction?: string;
+  importance?: number;
+  tags?: string[];
+}
+
+export interface BatchCharacterResult {
+  created: number;
+  ids: number[];
+}
+
+export interface StoryTimePatch {
+  storyTime?: string;
+  storyOrder?: number;
+  timelineGroup?: string;
+  tension?: number;
+  povCharacterId?: number | null;
+  targetWords?: number;
+  boardLane?: number;
+}

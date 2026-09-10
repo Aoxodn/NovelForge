@@ -21,6 +21,7 @@ pub mod names;
 pub mod project;
 pub mod relations;
 pub mod review;
+pub mod roadmap;
 pub mod scenes;
 pub mod search;
 pub mod stats;
