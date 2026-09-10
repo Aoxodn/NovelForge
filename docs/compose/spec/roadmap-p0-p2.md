@@ -3,7 +3,7 @@ feature: roadmap-p0-p2
 status: delivered
 updated: 2026-09-10
 branch: feature/roadmap-p0-p2
-commits: 1ec2193..working-tree
+commits: 1ec2193..a7386e3
 ---
 
 # NovelForge 路线图功能包（P0–P2）
